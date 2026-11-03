@@ -49,11 +49,22 @@ read_setting() {
 
 RCON_PORT="$(read_setting RCON_PORT)"
 RCON_PASS="$(read_setting RCON_PASS)"
+GAME_PORT="$(read_setting GAME_PORT)"
+SERVER_IP="$(read_setting SERVER_IP)"
 if [[ ! "$RCON_PORT" =~ ^[0-9]{1,5}$ ]] || (( 10#$RCON_PORT < 1 || 10#$RCON_PORT > 65535 )); then
 	printf 'Invalid or missing RCON_PORT in %s.\n' "$SERVER_CONFIG" >&2
 	exit 1
 fi
 RCON_PORT="$((10#$RCON_PORT))"
+if [[ ! "$GAME_PORT" =~ ^[0-9]{1,5}$ ]] || (( 10#$GAME_PORT < 1 || 10#$GAME_PORT > 65535 )); then
+	printf 'Invalid or missing GAME_PORT in %s.\n' "$SERVER_CONFIG" >&2
+	exit 1
+fi
+GAME_PORT="$((10#$GAME_PORT))"
+if [[ -z "$SERVER_IP" ]] || ! python3 -c 'import ipaddress, sys; ipaddress.ip_address(sys.argv[1])' "$SERVER_IP" >/dev/null 2>&1; then
+	printf 'Invalid or missing SERVER_IP in %s.\n' "$SERVER_CONFIG" >&2
+	exit 1
+fi
 if [[ -z "$RCON_PASS" || "$RCON_PASS" =~ [[:space:]] ]]; then
 	printf 'RCON_PASS must be set and must not contain whitespace in %s.\n' "$SERVER_CONFIG" >&2
 	exit 1
@@ -97,6 +108,19 @@ printf 'Installing DayZ server files into %s.\n' "$SERVERDATA_DIRECTORY"
 )
 printf 'DayZ server files are ready in %s.\n' "$SERVERDATA_DIRECTORY"
 
+# Find the default server configuration in the copied project folder.
+SCRIPT_DIRECTORY="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIRECTORY="$(cd -- "$SCRIPT_DIRECTORY/.." && pwd)"
+DEFAULT_SERVER_CONFIG="$PROJECT_DIRECTORY/config/default_serverDZ.cfg"
+
+# Replace serverDZ.cfg with the project template.
+if [[ ! -f "$DEFAULT_SERVER_CONFIG" ]]; then
+	printf 'Default server config was not found: %s\n' "$DEFAULT_SERVER_CONFIG" >&2
+	exit 1
+fi
+cp -- "$DEFAULT_SERVER_CONFIG" "$SERVERDATA_DIRECTORY/serverDZ.cfg"
+printf 'Installed server config at %s/serverDZ.cfg.\n' "$SERVERDATA_DIRECTORY"
+
 # Create the BattlEye RCON settings using the configured port and password.
 mkdir -p -- "$BATTLEYE_DIRECTORY"
 umask 077
@@ -104,4 +128,14 @@ printf 'RConPassword %s\nRConPort %s\n' "$RCON_PASS" "$RCON_PORT" > "$BATTLEYE_C
 chmod 0600 "$BATTLEYE_CONFIG"
 printf 'Created BattlEye config at %s.\n' "$BATTLEYE_CONFIG"
 
-#dayzcfg  ersetzen
+# Prepare the profile folder used by the example start command.
+mkdir -p -- "$SERVERDATA_DIRECTORY/profiles"
+
+# Show a clear completion message and a command for a manual test start.
+printf '\n'
+printf '==================================================\n'
+printf '       DAYZ SERVER INSTALLATION COMPLETE\n'
+printf '==================================================\n'
+printf 'Example test command (run as the server user):\n'
+printf 'cd %q && ./DayZServer -config=serverDZ.cfg -ip=%s -port=%s -profiles=profiles -BEpath=battleye -dologs -adminlog -netlog\n' \
+	"$SERVERDATA_DIRECTORY" "$SERVER_IP" "$GAME_PORT"
