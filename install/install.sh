@@ -80,33 +80,66 @@ fi
 # Set the paths for the source settings file and the install copy.
 SOURCE_CONFIG="$PROJECT_ROOT/config/default_server.conf"
 INSTALL_CONFIG="$SCRIPT_DIR/default_server.conf"
-
-# Copy the settings file when no install copy exists yet.
-if [[ ! -f "$INSTALL_CONFIG" ]]; then
-	if [[ ! -f "$SOURCE_CONFIG" ]]; then
-		printf 'Settings file not found: %s\n' "$SOURCE_CONFIG" >&2
-		exit 1
+EXISTING_SERVER_CONFIGS=()
+shopt -s nullglob
+for config in "$SCRIPT_DIR"/*_server.conf; do
+	if [[ -f "$config" && "$config" != "$INSTALL_CONFIG" ]]; then
+		EXISTING_SERVER_CONFIGS+=("$config")
 	fi
-	cp -- "$SOURCE_CONFIG" "$INSTALL_CONFIG"
-	printf 'Copied settings to: %s\n' "$INSTALL_CONFIG"
+done
+shopt -u nullglob
+
+SELECTED_EXISTING_CONFIG=0
+if [[ "${#EXISTING_SERVER_CONFIGS[@]}" -gt 0 ]]; then
+	printf 'Existing server configurations:\n'
+	for index in "${!EXISTING_SERVER_CONFIGS[@]}"; do
+		printf '  %d) %s\n' "$((index + 1))" "$(basename -- "${EXISTING_SERVER_CONFIGS[$index]}")"
+	done
+	printf '  n) Create a new server configuration\n'
+	while true; do
+		read -r -p 'Select a configuration or enter n for a new one: ' CONFIG_CHOICE
+		if [[ "${CONFIG_CHOICE,,}" == "n" ]]; then
+			break
+		fi
+		if [[ "$CONFIG_CHOICE" =~ ^[0-9]+$ ]] && (( 10#$CONFIG_CHOICE >= 1 && 10#$CONFIG_CHOICE <= ${#EXISTING_SERVER_CONFIGS[@]} )); then
+			INSTALL_CONFIG="${EXISTING_SERVER_CONFIGS[$((10#$CONFIG_CHOICE - 1))]}"
+			SELECTED_EXISTING_CONFIG=1
+			break
+		fi
+		printf 'Invalid selection. Choose a listed number or n.\n' >&2
+	done
+fi
+
+if [[ "$SELECTED_EXISTING_CONFIG" -eq 1 ]]; then
+	printf 'Using existing server configuration: %s\n' "$INSTALL_CONFIG"
 else
-	# Ask whether to abort and remove the existing install copy.
-	read -r -p 'Settings file already exists. Abort and delete it? [y/N] ' answer
-	case "$answer" in
-		[yY]|[yY][eE][sS])
-			rm -- "$INSTALL_CONFIG"
-			printf 'Settings file deleted. Installation aborted.\n'
+	# Copy the settings file when no install copy exists yet.
+	if [[ ! -f "$INSTALL_CONFIG" ]]; then
+		if [[ ! -f "$SOURCE_CONFIG" ]]; then
+			printf 'Settings file not found: %s\n' "$SOURCE_CONFIG" >&2
 			exit 1
-			;;
-		*)
-			# Open the existing settings file in nano for editing.
-			if ! command -v nano >/dev/null 2>&1; then
-				printf 'nano is required to edit the settings file. Install nano and try again.\n' >&2
+		fi
+		cp -- "$SOURCE_CONFIG" "$INSTALL_CONFIG"
+		printf 'Copied settings to: %s\n' "$INSTALL_CONFIG"
+	else
+		# Ask whether to abort and remove the existing install copy.
+		read -r -p 'Settings file already exists. Abort and delete it? [y/N] ' answer
+		case "$answer" in
+			[yY]|[yY][eE][sS])
+				rm -- "$INSTALL_CONFIG"
+				printf 'Settings file deleted. Installation aborted.\n'
 				exit 1
-			fi
-			nano "$INSTALL_CONFIG"
-			;;
-	esac
+				;;
+			*)
+				# Open the existing settings file for editing.
+				if ! command -v nano >/dev/null 2>&1; then
+					printf 'nano is required to edit the settings file. Install nano and try again.\n' >&2
+					exit 1
+				fi
+				nano "$INSTALL_CONFIG"
+				;;
+		esac
+	fi
 fi
 
 # Read the server name from the settings file without executing it.
@@ -137,7 +170,7 @@ fi
 
 # Rename the settings file and never overwrite an existing server file.
 RENAMED_CONFIG="$SCRIPT_DIR/${SERVER_NAME}_server.conf"
-if [[ "$INSTALL_CONFIG" != "$RENAMED_CONFIG" ]]; then
+if [[ "$SELECTED_EXISTING_CONFIG" -eq 0 && "$INSTALL_CONFIG" != "$RENAMED_CONFIG" ]]; then
 	if [[ -e "$RENAMED_CONFIG" ]]; then
 		printf 'Cannot rename settings: target already exists: %s\n' "$RENAMED_CONFIG" >&2
 		exit 1
@@ -145,6 +178,10 @@ if [[ "$INSTALL_CONFIG" != "$RENAMED_CONFIG" ]]; then
 	mv -- "$INSTALL_CONFIG" "$RENAMED_CONFIG"
 	INSTALL_CONFIG="$RENAMED_CONFIG"
 	printf 'Renamed settings file to: %s\n' "$INSTALL_CONFIG"
+fi
+if [[ "$INSTALL_CONFIG" == "$RENAMED_CONFIG" && -f "$RENAMED_CONFIG" && -f "$SCRIPT_DIR/default_server.conf" ]]; then
+	rm -- "$SCRIPT_DIR/default_server.conf"
+	printf 'Removed temporary settings file: %s/default_server.conf\n' "$SCRIPT_DIR"
 fi
 
 # Read the user name and UDP ports from the renamed settings file.
@@ -160,12 +197,8 @@ if [[ ! "$NEW_USER" =~ ^[a-z_][a-z0-9_-]*[$]?$ ]] || [[ "${#NEW_USER}" -gt 32 ]]
 	exit 1
 fi
 
-# Ask for a SteamCMD user name when none is set in the configuration.
-if [[ -z "$STEAM_USER" ]]; then
-	read -r -p 'SteamCMD username [anonymous]: ' STEAM_USER
-	STEAM_USER="${STEAM_USER:-anonymous}"
-fi
-if [[ ! "$STEAM_USER" =~ ^[A-Za-z0-9_.-]+$ ]] || [[ "${#STEAM_USER}" -gt 64 ]]; then
+# SteamCMD prompts for credentials when no account name is configured.
+if [[ -n "$STEAM_USER" && "${STEAM_USER,,}" != "anonymous" && ( ! "$STEAM_USER" =~ ^[A-Za-z0-9_.-]+$ || "${#STEAM_USER}" -gt 64 ) ]]; then
 	printf 'Invalid SteamCMD username in %s.\n' "$INSTALL_CONFIG" >&2
 	exit 1
 fi
@@ -203,10 +236,6 @@ if [[ ! -x "$UFW_BIN" ]]; then
 	printf 'UFW was not found at %s.\n' "$UFW_BIN" >&2
 	exit 1
 fi
-if [[ -e "$SUDOERS_FILE" ]]; then
-	printf 'Sudoers file already exists: %s\n' "$SUDOERS_FILE" >&2
-	exit 1
-fi
 TEMP_SUDOERS="$(mktemp "/etc/sudoers.d/.ugsm-${NEW_USER}-ufw.XXXXXX")"
 trap 'rm -f -- "$TEMP_SUDOERS"' EXIT
 SUDOERS_RULE="$NEW_USER ALL=(root) NOPASSWD:"
@@ -220,30 +249,40 @@ if ! visudo -cf "$TEMP_SUDOERS"; then
 	printf 'Generated sudoers rules are invalid.\n' >&2
 	exit 1
 fi
-
-# Do not change the password of an account that already exists.
-if getent passwd "$NEW_USER" >/dev/null; then
-	printf 'User %s already exists. Refusing to change its password.\n' "$NEW_USER" >&2
-	exit 1
-fi
-
-# Create the user and tell passwd to ask for the password twice.
-if ! useradd --user-group --create-home --shell /bin/bash "$NEW_USER"; then
-	printf 'Could not create user %s.\n' "$NEW_USER" >&2
-	exit 1
-fi
-printf 'Set the password for %s. You will be asked to enter it twice.\n' "$NEW_USER"
-if ! passwd "$NEW_USER"; then
-	if userdel --remove "$NEW_USER"; then
-		printf 'Password setup failed. The new user account was removed.\n' >&2
-	else
-		printf 'Password setup failed. The new user account could not be removed.\n' >&2
+SUDOERS_ALREADY_INSTALLED=0
+if [[ -e "$SUDOERS_FILE" || -L "$SUDOERS_FILE" ]]; then
+	if [[ ! -f "$SUDOERS_FILE" || -L "$SUDOERS_FILE" ]] || [[ "$(stat -c '%u:%a' "$SUDOERS_FILE")" != '0:440' ]] || ! cmp -s -- "$TEMP_SUDOERS" "$SUDOERS_FILE"; then
+		printf 'Existing sudoers file does not match the configured rules: %s\n' "$SUDOERS_FILE" >&2
+		exit 1
 	fi
-	exit 1
+	printf 'Matching sudoers rules already exist; skipping.\n'
+	rm -- "$TEMP_SUDOERS"
+	trap - EXIT
+	SUDOERS_ALREADY_INSTALLED=1
 fi
-printf 'Created Linux user: %s\n' "$NEW_USER"
 
-# Find the new user's home directory and primary group.
+# Create the user only when it does not exist yet; never reset an existing password.
+if getent passwd "$NEW_USER" >/dev/null; then
+	printf 'Linux user %s already exists; reusing the account.\n' "$NEW_USER"
+else
+	# Create the user and tell passwd to ask for the password twice.
+	if ! useradd --user-group --create-home --shell /bin/bash "$NEW_USER"; then
+		printf 'Could not create user %s.\n' "$NEW_USER" >&2
+		exit 1
+	fi
+	printf 'Set the password for %s. You will be asked to enter it twice.\n' "$NEW_USER"
+	if ! passwd "$NEW_USER"; then
+		if userdel --remove "$NEW_USER"; then
+			printf 'Password setup failed. The new user account was removed.\n' >&2
+		else
+			printf 'Password setup failed. The new user account could not be removed.\n' >&2
+		fi
+		exit 1
+	fi
+	printf 'Created Linux user: %s\n' "$NEW_USER"
+fi
+
+# Find the user's home directory and primary group.
 USER_HOME="$(getent passwd "$NEW_USER" | awk -F: '{ print $6 }')"
 if [[ -z "$USER_HOME" || ! -d "$USER_HOME" ]]; then
 	printf 'Could not find the home directory for %s.\n' "$NEW_USER" >&2
@@ -259,29 +298,39 @@ install -d -o "$NEW_USER" -g "$USER_GROUP" -m 0750 \
 	"$SERVER_DIRECTORY/serverdata"
 printf 'Created server directories under: %s\n' "$SERVER_DIRECTORY"
 
-# Install the validated sudo rules for this user's configured ports.
-if ! mv -- "$TEMP_SUDOERS" "$SUDOERS_FILE"; then
-	printf 'Could not install sudoers rules for %s.\n' "$NEW_USER" >&2
-	exit 1
+# Install the validated sudo rules only when they were not already present.
+if [[ "$SUDOERS_ALREADY_INSTALLED" -eq 0 ]]; then
+	if ! mv -- "$TEMP_SUDOERS" "$SUDOERS_FILE"; then
+		printf 'Could not install sudoers rules for %s.\n' "$NEW_USER" >&2
+		exit 1
+	fi
+	trap - EXIT
+	printf 'Granted %s permission to open and close only the configured UDP ports with sudo ufw.\n' "$NEW_USER"
 fi
-trap - EXIT
-printf 'Granted %s permission to open and close only the configured UDP ports with sudo ufw.\n' "$NEW_USER"
 
 # Copy the project folder into the server folder and assign it to the new user.
 UGSM_COPY="$SERVER_DIRECTORY/ugsm"
+SERVER_CONFIG_NAME="$(basename -- "$INSTALL_CONFIG")"
 if [[ -e "$UGSM_COPY" ]]; then
-	printf 'Project copy already exists: %s\n' "$UGSM_COPY" >&2
-	exit 1
+	if [[ ! -d "$UGSM_COPY" || ! -f "$UGSM_COPY/install/install_dayz.sh" || ! -r "$UGSM_COPY/install/$SERVER_CONFIG_NAME" ]]; then
+		printf 'Existing project copy is incomplete or missing the selected server config: %s\n' "$UGSM_COPY" >&2
+		exit 1
+	fi
+	if [[ "$(stat -c '%U:%G' "$UGSM_COPY")" != "$NEW_USER:$USER_GROUP" ]]; then
+		chown -R -- "$NEW_USER:$USER_GROUP" "$UGSM_COPY"
+	fi
+	printf 'Project copy already exists; reusing it.\n'
+else
+	cp -a -- "$PROJECT_ROOT" "$UGSM_COPY"
+	chown -R -- "$NEW_USER:$USER_GROUP" "$UGSM_COPY"
+	printf 'Copied the ugsm folder to: %s\n' "$UGSM_COPY"
 fi
-cp -a -- "$PROJECT_ROOT" "$UGSM_COPY"
-chown -R -- "$NEW_USER:$USER_GROUP" "$UGSM_COPY"
-printf 'Copied the ugsm folder to: %s\n' "$UGSM_COPY"
 
 # Run the copied DayZ installer as the new server user.
 DAYZ_INSTALL_DIR="$UGSM_COPY/install"
 printf 'Running the DayZ installer as %s.\n' "$NEW_USER"
 if ! runuser --user "$NEW_USER" -- /bin/bash -lc \
-	'cd -- "$1" && exec /bin/bash ./install_dayz.sh "$2" "$3" "$4"' _ "$DAYZ_INSTALL_DIR" "$SERVER_DIRECTORY" "$STEAM_USER" "$UGSM_COPY/install/${SERVER_NAME}_server.conf"; then
+	'cd -- "$1" && exec /bin/bash ./install_dayz.sh "$2" "$3" "$4"' _ "$DAYZ_INSTALL_DIR" "$SERVER_DIRECTORY" "$STEAM_USER" "$UGSM_COPY/install/$SERVER_CONFIG_NAME"; then
 	printf 'DayZ installation failed for user %s.\n' "$NEW_USER" >&2
 	exit 1
 fi

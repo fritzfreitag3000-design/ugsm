@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # The main installer passes the server folder, SteamCMD user, and settings file.
-if [[ "$#" -ne 3 || -z "$1" || -z "$2" || -z "$3" ]]; then
+if [[ "$#" -ne 3 || -z "$1" || -z "$3" ]]; then
 	printf 'Usage: %s <server directory> <SteamCMD username> <server config>\n' "$0" >&2
 	exit 2
 fi
@@ -94,15 +94,19 @@ printf 'Initializing SteamCMD.\n'
 printf 'SteamCMD is ready in %s.\n' "$STEAMCMD_DIRECTORY"
 
 # Download and validate the DayZ server files into serverdata.
-if [[ "$STEAM_USER" != "anonymous" ]]; then
+STEAM_LOGIN_ARGS=(+login)
+if [[ -n "$STEAM_USER" && "${STEAM_USER,,}" != "anonymous" ]]; then
 	printf 'SteamCMD may ask for the account password and Steam Guard code. Enter them at the prompt.\n'
+	STEAM_LOGIN_ARGS+=("$STEAM_USER")
+else
+	printf 'SteamCMD will prompt for the login credentials.\n'
 fi
 printf 'Installing DayZ server files into %s.\n' "$SERVERDATA_DIRECTORY"
 (
 	cd -- "$STEAMCMD_DIRECTORY"
 	./steamcmd.sh \
 		+force_install_dir "$SERVERDATA_DIRECTORY" \
-		+login "$STEAM_USER" \
+		"${STEAM_LOGIN_ARGS[@]}" \
 		+app_update "$DAYZ_SERVER_APP_ID" validate \
 		+quit
 )
