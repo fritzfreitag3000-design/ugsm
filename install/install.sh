@@ -160,6 +160,71 @@ read_setting() {
 	}' "$INSTALL_CONFIG"
 }
 
+# Write a quoted value for a setting into the settings file.
+write_setting() {
+	local tmp
+	tmp="$(mktemp)"
+	NEW_VALUE="$2" awk -v key="$1" '
+	$0 ~ "^[[:space:]]*" key "[[:space:]]*=" && !done {
+		print key "=\"" ENVIRON["NEW_VALUE"] "\""
+		done = 1
+		next
+	}
+	{ print }' "$INSTALL_CONFIG" > "$tmp"
+	cat -- "$tmp" > "$INSTALL_CONFIG"
+	rm -- "$tmp"
+}
+
+# Ask for one setting; Enter keeps the current value.
+prompt_setting() {
+	local key="$1" label="$2" secret="${3:-0}" current value confirm
+	current="$(read_setting "$key")"
+	while true; do
+		if [[ "$secret" -eq 1 ]]; then
+			read -r -s -p "$label [Enter keeps current]: " value
+			printf '\n'
+			if [[ -n "$value" ]]; then
+				read -r -s -p "Repeat $label: " confirm
+				printf '\n'
+				if [[ "$value" != "$confirm" ]]; then
+					printf 'Entries do not match. Try again.\n' >&2
+					continue
+				fi
+			fi
+		else
+			read -r -p "$label [$current]: " value
+		fi
+		value="${value:-$current}"
+		if [[ "$value" == *'"'* || "$value" == *'\'* ]]; then
+			printf 'Quotes and backslashes are not allowed.\n' >&2
+			continue
+		fi
+		break
+	done
+	write_setting "$key" "$value"
+}
+
+# Ask for the most important settings when a new configuration was just created.
+if [[ "$SELECTED_EXISTING_CONFIG" -eq 0 ]]; then
+	printf '\nEnter the main settings. Press Enter to keep the value in brackets.\n'
+	prompt_setting NEW_USER 'Linux user name'
+	prompt_setting SERVER_NAME 'Server name (folder/config name)'
+	prompt_setting STEAM_USER 'Steam account user (empty or anonymous = SteamCMD prompts)'
+	prompt_setting RCON_PASS 'RCON password' 1
+
+	# Offer to edit the remaining (advanced) settings in nano.
+	read -r -p 'Edit the advanced configuration (ports, IP, admin password) in nano? [y/N] ' EDIT_ANSWER
+	case "$EDIT_ANSWER" in
+		[yY]|[yY][eE][sS])
+			if ! command -v nano >/dev/null 2>&1; then
+				printf 'nano is required to edit the settings file. Install nano and try again.\n' >&2
+				exit 1
+			fi
+			nano "$INSTALL_CONFIG"
+			;;
+	esac
+fi
+
 SERVER_NAME="$(read_setting SERVER_NAME)"
 
 # Allow only safe characters in the server name used for the file name.
