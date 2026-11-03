@@ -281,7 +281,7 @@ printf 'Copied the ugsm folder to: %s\n' "$UGSM_COPY"
 DAYZ_INSTALL_DIR="$UGSM_COPY/install"
 printf 'Running the DayZ installer as %s.\n' "$NEW_USER"
 if ! runuser --user "$NEW_USER" -- /bin/bash -lc \
-	'cd -- "$1" && exec /bin/bash ./install_dayz.sh "$2" "$3"' _ "$DAYZ_INSTALL_DIR" "$SERVER_DIRECTORY" "$STEAM_USER"; then
+	'cd -- "$1" && exec /bin/bash ./install_dayz.sh "$2" "$3" "$4"' _ "$DAYZ_INSTALL_DIR" "$SERVER_DIRECTORY" "$STEAM_USER" "$UGSM_COPY/install/${SERVER_NAME}_server.conf"; then
 	printf 'DayZ installation failed for user %s.\n' "$NEW_USER" >&2
 	exit 1
 fi
