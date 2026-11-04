@@ -4,6 +4,8 @@ set -euo pipefail
 # Builds the DayZ server start command and runs it.
 # IP and ports come from install/<server name>_server.conf, mods from config/mods.conf
 # and config/servermod.conf, all other parameters from config/start.conf.
+# After the start the console and RPT log are watched until the Hive is initialized,
+# then the ports are opened again in ufw (limited by HIVE_TIMEOUT in start.conf).
 # Usage: start.sh [--print]
 #   --print  only show the command; otherwise it is shown and needs confirmation
 
@@ -100,12 +102,26 @@ for name in GAME_PORT STEAM_QUERY_PORT; do
 	fi
 done
 
+NEW_USER="$(read_setting "$SERVER_CONFIG" NEW_USER)"
+if [[ ! "$NEW_USER" =~ ^[a-z_][a-z0-9_-]*$ ]] || ! id "$NEW_USER" >/dev/null 2>&1; then
+	printf 'Invalid or missing NEW_USER (or user does not exist) in %s.\n' "$SERVER_CONFIG" >&2
+	exit 1
+fi
+
 CONFIG_FILE="$(read_setting "$START_CONFIG" CONFIG_FILE)"
 PROFILES="$(read_setting "$START_CONFIG" PROFILES)"
 BEPATH="$(read_setting "$START_CONFIG" BEPATH)"
 CPUCOUNT="$(read_setting "$START_CONFIG" CPUCOUNT)"
 LIMITFPS="$(read_setting "$START_CONFIG" LIMITFPS)"
 EXTRA_PARAMS="$(read_setting "$START_CONFIG" EXTRA_PARAMS)"
+HIVE_TIMEOUT="$(read_setting "$START_CONFIG" HIVE_TIMEOUT)"
+HIVE_TIMEOUT="${HIVE_TIMEOUT:-300}"
+HIVE_PATTERN="$(read_setting "$START_CONFIG" HIVE_PATTERN)"
+HIVE_PATTERN="${HIVE_PATTERN:-\[CE\]\[Hive\] :: Init sequence finished}"
+if [[ ! "$HIVE_TIMEOUT" =~ ^[0-9]+$ ]]; then
+	printf 'Invalid HIVE_TIMEOUT in %s.\n' "$START_CONFIG" >&2
+	exit 1
+fi
 
 ARGS=(
 	"-config=${CONFIG_FILE:-serverDZ.cfg}"
@@ -140,6 +156,32 @@ if [[ -n "$EXTRA_PARAMS" ]]; then
 	ARGS+=("${EXTRA_ARRAY[@]}")
 fi
 
+if ! command -v tmux >/dev/null 2>&1; then
+	printf 'tmux is not installed.\n' >&2
+	exit 1
+fi
+
+TMUX_CMD=(tmux)
+if [[ "$(id -un)" != "$NEW_USER" ]]; then
+	TMUX_CMD=(sudo -u "$NEW_USER" tmux)
+fi
+
+if "${TMUX_CMD[@]}" has-session -t "=$SERVER_NAME" 2>/dev/null; then
+	printf 'tmux session "%s" is already running.\n' "$SERVER_NAME" >&2
+	exit 1
+fi
+
+if command -v ss >/dev/null 2>&1; then
+	for port in "$((10#$GAME_PORT))" "$((10#$STEAM_QUERY_PORT))"; do
+		if ss -H -lntu 2>/dev/null | awk -v p="$port" '{n = split($5, a, ":"); if (a[n] == p) found = 1} END {exit !found}'; then
+			printf 'Port %s is already in use.\n' "$port" >&2
+			exit 1
+		fi
+	done
+else
+	printf 'Warning: ss not found, port check skipped.\n' >&2
+fi
+
 cd -- "$SERVERDATA_DIRECTORY"
 printf 'cd %q && ./DayZServer' "$SERVERDATA_DIRECTORY"
 printf ' %q' "${ARGS[@]}"
@@ -153,4 +195,58 @@ if [[ "${CONFIRM,,}" != "y" && "${CONFIRM,,}" != "yes" ]]; then
 	exit 0
 fi
 
-exec ./DayZServer "${ARGS[@]}"
+# The installer only allows exactly these sudo commands: ufw allow|delete allow <port>/udp.
+UFW_BIN="/usr/sbin/ufw"
+if [[ ! -x "$UFW_BIN" ]]; then
+	printf 'ufw was not found at %s.\n' "$UFW_BIN" >&2
+	exit 1
+fi
+UFW_CMD=("$UFW_BIN")
+(( EUID == 0 )) || UFW_CMD=(sudo -n "$UFW_BIN")
+
+# Block the ports by removing their allow rules (incoming traffic is denied by default).
+for port in "$((10#$GAME_PORT))" "$((10#$STEAM_QUERY_PORT))"; do
+	if ! UFW_OUTPUT="$("${UFW_CMD[@]}" delete allow "$port/udp" 2>&1)"; then
+		printf '%s\nCould not block port %s with ufw.\n' "$UFW_OUTPUT" "$port" >&2
+		exit 1
+	fi
+done
+
+SERVER_COMMAND="$(printf 'exec ./DayZServer'; printf ' %q' "${ARGS[@]}")"
+"${TMUX_CMD[@]}" new-session -d -s "$SERVER_NAME" -c "$SERVERDATA_DIRECTORY" "$SERVER_COMMAND"
+printf 'Server started in tmux session "%s" as user %s. Attach with: %s attach -t %s\n' \
+	"$SERVER_NAME" "$NEW_USER" "${TMUX_CMD[*]}" "$SERVER_NAME"
+printf 'Leave the session without stopping the server: press Ctrl+B, then D (detach).\n'
+
+# Watch the console and the newest RPT log until the Hive is initialized.
+PROFILES_DIRECTORY="$SERVERDATA_DIRECTORY/${PROFILES:-profiles}"
+[[ "$PROFILES_DIRECTORY" == /* ]] || PROFILES_DIRECTORY="$SERVERDATA_DIRECTORY/$PROFILES_DIRECTORY"
+START_TIME="$(date +%s)"
+printf 'Waiting up to %s s for the Hive to initialize...\n' "$HIVE_TIMEOUT"
+HIVE_READY=0
+while (( $(date +%s) - START_TIME < HIVE_TIMEOUT )); do
+	if ! "${TMUX_CMD[@]}" has-session -t "=$SERVER_NAME" 2>/dev/null; then
+		printf 'The server stopped before the Hive was initialized. Ports stay blocked.\n' >&2
+		exit 1
+	fi
+	if "${TMUX_CMD[@]}" capture-pane -p -t "=$SERVER_NAME" 2>/dev/null | grep -Eiq -- "$HIVE_PATTERN"; then
+		HIVE_READY=1
+		break
+	fi
+	RPT_FILE="$(find "$PROFILES_DIRECTORY" -maxdepth 1 -name '*.RPT' -newermt "@$START_TIME" -printf '%T@ %p\n' 2>/dev/null | sort -n | tail -n 1 | cut -d' ' -f2-)"
+	if [[ -n "$RPT_FILE" ]] && grep -Eiq -- "$HIVE_PATTERN" "$RPT_FILE" 2>/dev/null; then
+		HIVE_READY=1
+		break
+	fi
+	sleep 2
+done
+
+if (( ! HIVE_READY )); then
+	printf 'Hive was not initialized within %s s. Ports stay blocked.\n' "$HIVE_TIMEOUT" >&2
+	exit 1
+fi
+
+for port in "$((10#$GAME_PORT))" "$((10#$STEAM_QUERY_PORT))"; do
+	"${UFW_CMD[@]}" allow "$port/udp" || { printf 'Could not open port %s with ufw.\n' "$port" >&2; exit 1; }
+done
+printf 'Hive initialized. Ports %s and %s are open.\n' "$GAME_PORT" "$STEAM_QUERY_PORT"
