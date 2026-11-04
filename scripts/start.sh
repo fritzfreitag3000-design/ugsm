@@ -5,7 +5,7 @@ set -euo pipefail
 # IP and ports come from install/<server name>_server.conf, mods from config/mods.conf
 # and config/servermod.conf, all other parameters from config/start.conf.
 # After the start the console and RPT log are watched until the Hive is initialized,
-# then the ports are opened again in ufw (limited by HIVE_TIMEOUT in start.conf).
+# then the ports are opened again in ufw (limited by STARTUP_TIMEOUT in the server conf).
 # Usage: start.sh [--print]
 #   --print  only show the command; otherwise it is shown and needs confirmation
 
@@ -114,14 +114,18 @@ BEPATH="$(read_setting "$START_CONFIG" BEPATH)"
 CPUCOUNT="$(read_setting "$START_CONFIG" CPUCOUNT)"
 LIMITFPS="$(read_setting "$START_CONFIG" LIMITFPS)"
 EXTRA_PARAMS="$(read_setting "$START_CONFIG" EXTRA_PARAMS)"
-HIVE_TIMEOUT="$(read_setting "$START_CONFIG" HIVE_TIMEOUT)"
-HIVE_TIMEOUT="${HIVE_TIMEOUT:-300}"
+STARTUP_TIMEOUT="$(read_setting "$SERVER_CONFIG" STARTUP_TIMEOUT)"
+STARTUP_TIMEOUT="${STARTUP_TIMEOUT:-300}"
+PORT_OPEN_DELAY="$(read_setting "$SERVER_CONFIG" PORT_OPEN_DELAY)"
+PORT_OPEN_DELAY="${PORT_OPEN_DELAY:-0}"
 HIVE_PATTERN="$(read_setting "$START_CONFIG" HIVE_PATTERN)"
 HIVE_PATTERN="${HIVE_PATTERN:-\[CE\]\[Hive\] :: Init sequence finished}"
-if [[ ! "$HIVE_TIMEOUT" =~ ^[0-9]+$ ]]; then
-	printf 'Invalid HIVE_TIMEOUT in %s.\n' "$START_CONFIG" >&2
-	exit 1
-fi
+for name in STARTUP_TIMEOUT PORT_OPEN_DELAY; do
+	if [[ ! "${!name}" =~ ^[0-9]+$ ]]; then
+		printf 'Invalid %s in %s.\n' "$name" "$SERVER_CONFIG" >&2
+		exit 1
+	fi
+done
 
 ARGS=(
 	"-config=${CONFIG_FILE:-serverDZ.cfg}"
@@ -222,9 +226,9 @@ printf 'Leave the session without stopping the server: press Ctrl+B, then D (det
 PROFILES_DIRECTORY="$SERVERDATA_DIRECTORY/${PROFILES:-profiles}"
 [[ "$PROFILES_DIRECTORY" == /* ]] || PROFILES_DIRECTORY="$SERVERDATA_DIRECTORY/$PROFILES_DIRECTORY"
 START_TIME="$(date +%s)"
-printf 'Waiting up to %s s for the Hive to initialize...\n' "$HIVE_TIMEOUT"
+printf 'Waiting up to %s s for the Hive to initialize...\n' "$STARTUP_TIMEOUT"
 HIVE_READY=0
-while (( $(date +%s) - START_TIME < HIVE_TIMEOUT )); do
+while (( $(date +%s) - START_TIME < STARTUP_TIMEOUT )); do
 	if ! "${TMUX_CMD[@]}" has-session -t "=$SERVER_NAME" 2>/dev/null; then
 		printf 'The server stopped before the Hive was initialized. Ports stay blocked.\n' >&2
 		exit 1
@@ -242,11 +246,15 @@ while (( $(date +%s) - START_TIME < HIVE_TIMEOUT )); do
 done
 
 if (( ! HIVE_READY )); then
-	printf 'Hive was not initialized within %s s. Ports stay blocked.\n' "$HIVE_TIMEOUT" >&2
+	printf 'Hive was not initialized within %s s. Ports stay blocked.\n' "$STARTUP_TIMEOUT" >&2
 	exit 1
 fi
 
+if (( 10#$PORT_OPEN_DELAY > 0 )); then
+	printf 'Hive initialized. Opening the ports in %s s...\n' "$PORT_OPEN_DELAY"
+	sleep "$((10#$PORT_OPEN_DELAY))"
+fi
 for port in "$((10#$GAME_PORT))" "$((10#$STEAM_QUERY_PORT))"; do
 	"${UFW_CMD[@]}" allow "$port/udp" || { printf 'Could not open port %s with ufw.\n' "$port" >&2; exit 1; }
 done
-printf 'Hive initialized. Ports %s and %s are open.\n' "$GAME_PORT" "$STEAM_QUERY_PORT"
+printf 'Ports %s and %s are open.\n' "$GAME_PORT" "$STEAM_QUERY_PORT"
