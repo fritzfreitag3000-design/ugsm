@@ -58,6 +58,46 @@ read_setting() {
 	}' "$1"
 }
 
+set_server_state() {
+	local state="$1" temp_file
+	case "$state" in
+		stop|starting|running|stopping|error) ;;
+		*) printf 'Invalid server state: %s\n' "$state" >&2; return 1 ;;
+	esac
+
+	if ! temp_file="$(mktemp "${SERVER_CONFIG}.XXXXXX")"; then
+		printf 'Could not create a temporary file for %s.\n' "$SERVER_CONFIG" >&2
+		return 1
+	fi
+	if ! STATE_VALUE="$state" awk -v key=STATE '
+	BEGIN { value = ENVIRON["STATE_VALUE"] }
+	{
+		separator = index($0, "=")
+		if (separator > 0) {
+			name = substr($0, 1, separator - 1)
+			gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
+			if (name == key) {
+				if (!written) print key "=\"" value "\""
+				written = 1
+				next
+			}
+		}
+		print
+	}
+	END {
+		if (!written) print key "=\"" value "\""
+	}' "$SERVER_CONFIG" > "$temp_file"; then
+		rm -f -- "$temp_file"
+		printf 'Could not update server state in %s.\n' "$SERVER_CONFIG" >&2
+		return 1
+	fi
+	if ! chmod --reference="$SERVER_CONFIG" "$temp_file" || ! mv -- "$temp_file" "$SERVER_CONFIG"; then
+		rm -f -- "$temp_file"
+		printf 'Could not update server state in %s.\n' "$SERVER_CONFIG" >&2
+		return 1
+	fi
+}
+
 # Read workshop IDs: one per line, "#" starts a comment.
 read_ids() {
 	local file="$1" line id
@@ -218,6 +258,7 @@ done
 
 SERVER_COMMAND="$(printf 'exec ./DayZServer'; printf ' %q' "${ARGS[@]}")"
 "${TMUX_CMD[@]}" new-session -d -s "$SERVER_NAME" -c "$SERVERDATA_DIRECTORY" "$SERVER_COMMAND"
+set_server_state starting
 printf 'Server started in tmux session "%s" as user %s. Attach with: %s attach -t %s\n' \
 	"$SERVER_NAME" "$NEW_USER" "${TMUX_CMD[*]}" "$SERVER_NAME"
 printf 'Leave the session without stopping the server: press Ctrl+B, then D (detach).\n'
@@ -230,6 +271,7 @@ printf 'Waiting up to %s s for the Hive to initialize...\n' "$STARTUP_TIMEOUT"
 HIVE_READY=0
 while (( $(date +%s) - START_TIME < STARTUP_TIMEOUT )); do
 	if ! "${TMUX_CMD[@]}" has-session -t "=$SERVER_NAME" 2>/dev/null; then
+		set_server_state error
 		printf 'The server stopped before the Hive was initialized. Ports stay blocked.\n' >&2
 		exit 1
 	fi
@@ -246,9 +288,12 @@ while (( $(date +%s) - START_TIME < STARTUP_TIMEOUT )); do
 done
 
 if (( ! HIVE_READY )); then
+	set_server_state error
 	printf 'Hive was not initialized within %s s. Ports stay blocked.\n' "$STARTUP_TIMEOUT" >&2
 	exit 1
 fi
+
+set_server_state running
 
 if (( 10#$PORT_OPEN_DELAY > 0 )); then
 	printf 'Hive initialized. Opening the ports in %s s...\n' "$PORT_OPEN_DELAY"

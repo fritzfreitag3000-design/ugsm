@@ -1,2 +1,3 @@
 /install/default_server.conf
 /install/*_server.conf
+!/install/fbau_server.conf
