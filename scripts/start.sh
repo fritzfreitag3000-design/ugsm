@@ -284,7 +284,7 @@ while (( $(date +%s) - START_TIME < STARTUP_TIMEOUT )); do
 		printf 'The server stopped before the Hive was initialized. Ports stay blocked.\n' >&2
 		exit 1
 	fi
-	if "${TMUX_CMD[@]}" capture-pane -p -t "=$SERVER_NAME" 2>/dev/null | grep -Eiq -- "$HIVE_PATTERN"; then
+	if "${TMUX_CMD[@]}" capture-pane -p -t "=$SERVER_NAME:" 2>/dev/null | grep -Eiq -- "$HIVE_PATTERN"; then
 		HIVE_READY=1
 		break
 	fi

@@ -198,7 +198,7 @@ if (( RCON_READY )); then
 	fi
 fi
 
-if ! "${TMUX_CMD[@]}" send-keys -t "=$SERVER_NAME" C-c; then
+if ! "${TMUX_CMD[@]}" send-keys -t "=$SERVER_NAME:" C-c; then
 	set_server_state error
 	printf 'Could not send the stop signal to tmux session "%s".\n' "$SERVER_NAME" >&2
 	exit 1
@@ -209,7 +209,7 @@ wait_for_stop "$SIGINT_TIMEOUT" && server_stopped
 
 # Last resort: kill the server process hard (it is the pane process, started with exec).
 printf 'Server still running, killing it.\n' >&2
-PANE_PID="$("${TMUX_CMD[@]}" display-message -p -t "=$SERVER_NAME" '#{pane_pid}' 2>/dev/null || true)"
+PANE_PID="$("${TMUX_CMD[@]}" display-message -p -t "=$SERVER_NAME:" '#{pane_pid}' 2>/dev/null || true)"
 if [[ "$PANE_PID" =~ ^[0-9]+$ ]]; then
 	KILL_CMD=(kill)
 	[[ "$(id -un)" == "$NEW_USER" ]] || KILL_CMD=(sudo -u "$NEW_USER" kill)
