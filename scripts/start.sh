@@ -5,7 +5,7 @@ set -euo pipefail
 # IP and ports come from install/<server name>_server.conf, mods from config/mods.conf
 # and config/servermod.conf, all other parameters from config/start.conf.
 # Usage: start.sh [--print]
-#   --print  only show the command instead of starting the server
+#   --print  only show the command; otherwise it is shown and needs confirmation
 
 PRINT_ONLY=0
 if [[ "$#" -gt 1 || ( "$#" -eq 1 && "$1" != "--print" ) ]]; then
@@ -145,5 +145,12 @@ printf 'cd %q && ./DayZServer' "$SERVERDATA_DIRECTORY"
 printf ' %q' "${ARGS[@]}"
 printf '\n'
 (( PRINT_ONLY )) && exit 0
+
+# Ask for confirmation before starting the server.
+read -r -p 'Start the server with this command? [y/N] ' CONFIRM
+if [[ "${CONFIRM,,}" != "y" && "${CONFIRM,,}" != "yes" ]]; then
+	printf 'Aborted.\n'
+	exit 0
+fi
 
 exec ./DayZServer "${ARGS[@]}"
