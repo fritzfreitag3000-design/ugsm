@@ -7,7 +7,7 @@ set -euo pipefail
 # After the start the console and RPT log are watched until the Hive is initialized,
 # then the ports are opened again in ufw (limited by STARTUP_TIMEOUT in the server conf).
 # Usage: start.sh [--print]
-#   --print  only show the command; otherwise it is shown and needs confirmation
+#   --print  only show the command; otherwise show it and start the server
 
 PRINT_ONLY=0
 if [[ "$#" -gt 1 || ( "$#" -eq 1 && "$1" != "--print" ) ]]; then
@@ -210,6 +210,22 @@ if [[ "$(id -un)" != "$NEW_USER" ]]; then
 	TMUX_CMD=(sudo -u "$NEW_USER" tmux)
 fi
 
+# Hold a lock while this script runs so stop.sh can refuse to run in the meantime.
+# The kernel releases it when the script ends, even after an abort.
+if (( ! PRINT_ONLY )); then
+	if ! command -v flock >/dev/null 2>&1; then
+		printf 'flock is not installed.\n' >&2
+		exit 1
+	fi
+	LOCK_FILE="$SERVER_DIRECTORY/.ugsm_start.lock"
+	touch -- "$LOCK_FILE"
+	exec 9< "$LOCK_FILE"
+	if ! flock -n 9; then
+		printf 'Another start.sh or stop.sh is already running for "%s".\n' "$SERVER_NAME" >&2
+		exit 1
+	fi
+fi
+
 if "${TMUX_CMD[@]}" has-session -t "=$SERVER_NAME" 2>/dev/null; then
 	printf 'tmux session "%s" is already running.\n' "$SERVER_NAME" >&2
 	exit 1
@@ -232,13 +248,6 @@ printf ' %q' "${ARGS[@]}"
 printf '\n'
 (( PRINT_ONLY )) && exit 0
 
-# Ask for confirmation before starting the server.
-read -r -p 'Start the server with this command? [y/N] ' CONFIRM
-if [[ "${CONFIRM,,}" != "y" && "${CONFIRM,,}" != "yes" ]]; then
-	printf 'Aborted.\n'
-	exit 0
-fi
-
 # The installer only allows exactly these sudo commands: ufw allow|delete allow <port>/udp.
 UFW_BIN="/usr/sbin/ufw"
 if [[ ! -x "$UFW_BIN" ]]; then
@@ -257,7 +266,7 @@ for port in "$((10#$GAME_PORT))" "$((10#$STEAM_QUERY_PORT))"; do
 done
 
 SERVER_COMMAND="$(printf 'exec ./DayZServer'; printf ' %q' "${ARGS[@]}")"
-"${TMUX_CMD[@]}" new-session -d -s "$SERVER_NAME" -c "$SERVERDATA_DIRECTORY" "$SERVER_COMMAND"
+"${TMUX_CMD[@]}" new-session -d -s "$SERVER_NAME" -c "$SERVERDATA_DIRECTORY" "$SERVER_COMMAND" 9<&-
 set_server_state starting
 printf 'Server started in tmux session "%s" as user %s. Attach with: %s attach -t %s\n' \
 	"$SERVER_NAME" "$NEW_USER" "${TMUX_CMD[*]}" "$SERVER_NAME"

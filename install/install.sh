@@ -56,6 +56,7 @@ REQUIRED_PACKAGES=(
 	openssl
 	sudo
 	ufw
+	util-linux
 )
 
 # Collect packages that are not installed yet.
@@ -75,6 +76,26 @@ if [[ "${#MISSING_PACKAGES[@]}" -gt 0 ]]; then
 	DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${MISSING_PACKAGES[@]}"
 else
 	printf 'All required packages are already installed.\n'
+fi
+
+# bercon-cli is not available as an apt package; download the release binary (used by stop.sh).
+if ! command -v bercon-cli >/dev/null 2>&1; then
+	case "$(uname -m)" in
+		x86_64|amd64) BERCON_ARCH="amd64" ;;
+		aarch64|arm64) BERCON_ARCH="arm64" ;;
+		*) printf 'Unsupported architecture for bercon-cli: %s\n' "$(uname -m)" >&2; exit 1 ;;
+	esac
+	BERCON_TEMP="$(mktemp)"
+	printf 'Installing bercon-cli.\n'
+	if ! curl -fsSL -o "$BERCON_TEMP" "https://github.com/WoozyMasta/bercon-cli/releases/latest/download/bercon-cli-linux-$BERCON_ARCH" \
+		|| ! install -m 0755 -- "$BERCON_TEMP" /usr/local/bin/bercon-cli; then
+		rm -f -- "$BERCON_TEMP"
+		printf 'Could not install bercon-cli.\n' >&2
+		exit 1
+	fi
+	rm -f -- "$BERCON_TEMP"
+else
+	printf 'bercon-cli is already installed.\n'
 fi
 
 # Set the paths for the source settings file and the install copy.
