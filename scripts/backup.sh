@@ -19,7 +19,7 @@ SERVER_NAME="$(basename -- "$SERVER_DIRECTORY")"
 SERVERDATA_DIRECTORY="$SERVER_DIRECTORY/serverdata"
 SERVER_CONFIG_FILE="$SERVERDATA_DIRECTORY/serverDZ.cfg"
 BACKUP_BASE_DIRECTORY="$SERVER_DIRECTORY/backup"
-MPMISSION_DIRECTORY="$SERVERDATA_DIRECTORY/mpmission"
+MPMISSION_DIRECTORY="$SERVERDATA_DIRECTORY/mpmissions"
 PROFILES_DIRECTORY="$SERVERDATA_DIRECTORY/profiles"
 BATTLEYE_DIRECTORY="$SERVERDATA_DIRECTORY/battleye"
 
@@ -34,7 +34,7 @@ if [[ ! -f "$SERVER_CONFIG_FILE" ]]; then
 	exit 1
 fi
 if [[ ! -d "$MPMISSION_DIRECTORY" ]]; then
-	printf 'mpmission directory is missing: %s\n' "$MPMISSION_DIRECTORY" >&2
+	printf 'mpmissions directory is missing: %s\n' "$MPMISSION_DIRECTORY" >&2
 	exit 1
 fi
 if [[ ! -d "$PROFILES_DIRECTORY" ]]; then
