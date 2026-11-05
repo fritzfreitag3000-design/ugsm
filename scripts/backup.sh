@@ -76,7 +76,7 @@ mkdir -p -- "$BACKUP_BASE_DIRECTORY"
 
 # Clean up profiles and serverdata directory: archive logs and error scripts
 CLEANUP_TIMESTAMP="$(date '+%Y%m%d_%H%M%S')"
-PROFILES_CLEANUP_DIR="$PROFILES_DIRECTORY/cleanup"
+PROFILES_CLEANUP_DIR="$PROFILES_DIRECTORY/logs_archiv"
 mkdir -p -- "$PROFILES_CLEANUP_DIR"
 
 CLEANUP_FOLDER="$PROFILES_CLEANUP_DIR/$CLEANUP_TIMESTAMP"
@@ -91,7 +91,7 @@ find "$SERVERDATA_DIRECTORY" -maxdepth 1 \( -iname "*.log" -o -iname "*.rpt" -o 
 # Clean up old cleanup folders in profiles, keep only the 8 most recent
 CLEANUP_COUNT=$(find "$PROFILES_CLEANUP_DIR" -maxdepth 1 -type d | grep -v "^$PROFILES_CLEANUP_DIR$" | wc -l)
 if (( CLEANUP_COUNT > 8 )); then
-	find "$PROFILES_CLEANUP_DIR" -maxdepth 1 -type d ! -name "cleanup" -printf '%T@ %p\n' | \
+	find "$PROFILES_CLEANUP_DIR" -maxdepth 1 -type d ! -name "logs_archiv" -printf '%T@ %p\n' | \
 		sort -n | head -n "$((CLEANUP_COUNT - 8))" | cut -d' ' -f2- | while read -r old_cleanup; do
 			rm -rf -- "$old_cleanup"
 			printf 'Deleted old cleanup folder: %s\n' "$old_cleanup"
