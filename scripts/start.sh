@@ -302,8 +302,6 @@ if (( ! HIVE_READY )); then
 	exit 1
 fi
 
-set_server_state running
-
 if (( 10#$PORT_OPEN_DELAY > 0 )); then
 	printf 'Hive initialized. Opening the ports in %s s...\n' "$PORT_OPEN_DELAY"
 	sleep "$((10#$PORT_OPEN_DELAY))"
@@ -311,4 +309,5 @@ fi
 for port in "$((10#$GAME_PORT))" "$((10#$STEAM_QUERY_PORT))"; do
 	"${UFW_CMD[@]}" allow "$port/udp" || { printf 'Could not open port %s with ufw.\n' "$port" >&2; exit 1; }
 done
+set_server_state running
 printf 'Ports %s and %s are open.\n' "$GAME_PORT" "$STEAM_QUERY_PORT"
