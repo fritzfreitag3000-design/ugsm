@@ -83,10 +83,10 @@ CLEANUP_FOLDER="$PROFILES_CLEANUP_DIR/$CLEANUP_TIMESTAMP"
 mkdir -p -- "$CLEANUP_FOLDER"
 
 # Find and move log files and error scripts from profiles
-find "$PROFILES_DIRECTORY" -maxdepth 2 \( -name "*.log" -o -name "*.rpt" -o -name "*.adm" -o -name "*error*" \) -type f -exec mv -- {} "$CLEANUP_FOLDER/" \; 2>/dev/null || true
+find "$PROFILES_DIRECTORY" -maxdepth 2 \( -iname "*.log" -o -iname "*.rpt" -o -iname "*.adm" -o -iname "*error*" \) -type f -exec mv -- {} "$CLEANUP_FOLDER/" \; 2>/dev/null || true
 
-# Find and move log files and error scripts from serverdata, then delete them
-find "$SERVERDATA_DIRECTORY" -maxdepth 1 \( -name "*.log" -o -name "*.rpt" -o -name "*.adm" -o -name "*error*" \) -type f -exec mv -- {} "$CLEANUP_FOLDER/" \; 2>/dev/null || true
+# Find and move log files and error scripts from serverdata
+find "$SERVERDATA_DIRECTORY" -maxdepth 1 \( -iname "*.log" -o -iname "*.rpt" -o -iname "*.adm" -o -iname "*error*" \) -type f -exec mv -- {} "$CLEANUP_FOLDER/" \; 2>/dev/null || true
 
 # Clean up old cleanup folders in profiles, keep only the 8 most recent
 CLEANUP_COUNT=$(find "$PROFILES_CLEANUP_DIR" -maxdepth 1 -type d | grep -v "^$PROFILES_CLEANUP_DIR$" | wc -l)
