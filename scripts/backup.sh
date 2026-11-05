@@ -5,10 +5,19 @@ set -euo pipefail
 # Reads the active mission from serverdata/serverDZ.cfg, backs up the mission folder
 # and profiles directory, compresses them, and maintains a maximum of 8 backups.
 # This script is meant to run from <server_directory>/ugsm/scripts/backup.sh
-# Usage: backup.sh
+# Usage: 
+#   backup.sh              - Create a new backup
+#   backup.sh auto_recover - Restore from the latest backup (creates error backup first)
 
-if [[ "$#" -gt 0 ]]; then
-	printf 'Usage: %s\n' "$0" >&2
+if [[ "$#" -gt 1 ]]; then
+	printf 'Usage: %s [auto_recover]\n' "$0" >&2
+	exit 2
+fi
+
+MODE="${1:-backup}"
+if [[ "$MODE" != "backup" && "$MODE" != "auto_recover" ]]; then
+	printf 'Invalid mode: %s\n' "$MODE" >&2
+	printf 'Usage: %s [auto_recover]\n' "$0" >&2
 	exit 2
 fi
 
@@ -71,68 +80,143 @@ if [[ ! -d "$MISSION_FOLDER" ]]; then
 	exit 1
 fi
 
-# Create backup directory if it doesn't exist
-mkdir -p -- "$BACKUP_BASE_DIRECTORY"
+# Function to create a backup
+create_backup() {
+	# Create backup directory if it doesn't exist
+	mkdir -p -- "$BACKUP_BASE_DIRECTORY"
 
-# Clean up profiles and serverdata directory: archive logs and error scripts
-CLEANUP_TIMESTAMP="$(date '+%Y%m%d_%H%M%S')"
-PROFILES_CLEANUP_DIR="$PROFILES_DIRECTORY/logs_archiv"
-mkdir -p -- "$PROFILES_CLEANUP_DIR"
+	# Clean up profiles and serverdata directory: archive logs and error scripts
+	CLEANUP_TIMESTAMP="$(date '+%Y%m%d_%H%M%S')"
+	PROFILES_CLEANUP_DIR="$PROFILES_DIRECTORY/logs_archiv"
+	mkdir -p -- "$PROFILES_CLEANUP_DIR"
 
-CLEANUP_FOLDER="$PROFILES_CLEANUP_DIR/$CLEANUP_TIMESTAMP"
-mkdir -p -- "$CLEANUP_FOLDER"
+	CLEANUP_FOLDER="$PROFILES_CLEANUP_DIR/$CLEANUP_TIMESTAMP"
+	mkdir -p -- "$CLEANUP_FOLDER"
 
-# Find and move log files and error scripts from profiles
-find "$PROFILES_DIRECTORY" -maxdepth 2 \( -iname "*.log" -o -iname "*.rpt" -o -iname "*.adm" -o -iname "*error*" \) -type f -exec mv -- {} "$CLEANUP_FOLDER/" \; 2>/dev/null || true
+	# Find and move log files and error scripts from profiles
+	find "$PROFILES_DIRECTORY" -maxdepth 2 \( -iname "*.log" -o -iname "*.rpt" -o -iname "*.adm" -o -iname "*error*" \) -type f -exec mv -- {} "$CLEANUP_FOLDER/" \; 2>/dev/null || true
 
-# Find and move log files and error scripts from serverdata
-find "$SERVERDATA_DIRECTORY" -maxdepth 1 \( -iname "*.log" -o -iname "*.rpt" -o -iname "*.adm" -o -iname "*error*" \) -type f -exec mv -- {} "$CLEANUP_FOLDER/" \; 2>/dev/null || true
+	# Find and move log files and error scripts from serverdata
+	find "$SERVERDATA_DIRECTORY" -maxdepth 1 \( -iname "*.log" -o -iname "*.rpt" -o -iname "*.adm" -o -iname "*error*" \) -type f -exec mv -- {} "$CLEANUP_FOLDER/" \; 2>/dev/null || true
 
-# Clean up old cleanup folders in profiles, keep only the 8 most recent
-CLEANUP_COUNT=$(find "$PROFILES_CLEANUP_DIR" -maxdepth 1 -type d | grep -v "^$PROFILES_CLEANUP_DIR$" | wc -l)
-if (( CLEANUP_COUNT > 8 )); then
-	find "$PROFILES_CLEANUP_DIR" -maxdepth 1 -type d ! -name "logs_archiv" -printf '%T@ %p\n' | \
-		sort -n | head -n "$((CLEANUP_COUNT - 8))" | cut -d' ' -f2- | while read -r old_cleanup; do
-			rm -rf -- "$old_cleanup"
-			printf 'Deleted old cleanup folder: %s\n' "$old_cleanup"
-		done
-fi
+	# Clean up old cleanup folders in profiles, keep only the 8 most recent
+	CLEANUP_COUNT=$(find "$PROFILES_CLEANUP_DIR" -maxdepth 1 -type d | grep -v "^$PROFILES_CLEANUP_DIR$" | wc -l)
+	if (( CLEANUP_COUNT > 8 )); then
+		find "$PROFILES_CLEANUP_DIR" -maxdepth 1 -type d ! -name "logs_archiv" -printf '%T@ %p\n' | \
+			sort -n | head -n "$((CLEANUP_COUNT - 8))" | cut -d' ' -f2- | while read -r old_cleanup; do
+				rm -rf -- "$old_cleanup"
+				printf 'Deleted old cleanup folder: %s\n' "$old_cleanup"
+			done
+	fi
 
-printf 'Cleaned up profiles and serverdata directories, archived logs to: %s\n' "$CLEANUP_FOLDER"
+	printf 'Cleaned up profiles and serverdata directories, archived logs to: %s\n' "$CLEANUP_FOLDER"
 
-# Create timestamped backup folder
-TIMESTAMP="$(date '+%Y%m%d_%H%M%S')"
-BACKUP_FOLDER="$BACKUP_BASE_DIRECTORY/$TIMESTAMP"
-mkdir -p -- "$BACKUP_FOLDER"
+	# Create timestamped backup folder
+	TIMESTAMP="$(date '+%Y%m%d_%H%M%S')"
+	BACKUP_FOLDER="$BACKUP_BASE_DIRECTORY/$TIMESTAMP"
+	mkdir -p -- "$BACKUP_FOLDER"
 
-# Copy the active mission folder, profiles directory, server config, and battleye config
-cp -a -- "$MISSION_FOLDER" "$BACKUP_FOLDER/"
-cp -a -- "$PROFILES_DIRECTORY" "$BACKUP_FOLDER/"
-cp -a -- "$BATTLEYE_DIRECTORY" "$BACKUP_FOLDER/"
-cp -- "$SERVER_CONFIG_FILE" "$BACKUP_FOLDER/"
+	# Copy the active mission folder, profiles directory, server config, and battleye config
+	cp -a -- "$MISSION_FOLDER" "$BACKUP_FOLDER/"
+	cp -a -- "$PROFILES_DIRECTORY" "$BACKUP_FOLDER/"
+	cp -a -- "$BATTLEYE_DIRECTORY" "$BACKUP_FOLDER/"
+	cp -- "$SERVER_CONFIG_FILE" "$BACKUP_FOLDER/"
 
-# Compress the backup
-BACKUP_FILE="$BACKUP_BASE_DIRECTORY/$TIMESTAMP.zip"
-cd -- "$BACKUP_FOLDER/.." || exit 1
-zip -r "$TIMESTAMP.zip" "$TIMESTAMP" >/dev/null 2>&1
-if [[ -f "$BACKUP_FILE" ]]; then
-	rm -rf -- "$BACKUP_FOLDER"
-	printf 'Created backup: %s\n' "$BACKUP_FILE"
+	# Compress the backup
+	BACKUP_FILE="$BACKUP_BASE_DIRECTORY/$TIMESTAMP.zip"
+	cd -- "$BACKUP_FOLDER/.." || exit 1
+	zip -r "$TIMESTAMP.zip" "$TIMESTAMP" >/dev/null 2>&1
+	if [[ -f "$BACKUP_FILE" ]]; then
+		rm -rf -- "$BACKUP_FOLDER"
+		printf 'Created backup: %s\n' "$BACKUP_FILE"
+	else
+		printf 'Failed to create backup archive: %s\n' "$BACKUP_FILE" >&2
+		rm -rf -- "$BACKUP_FOLDER"
+		exit 1
+	fi
+
+	# Clean up old backups, keep only the 8 most recent
+	BACKUP_COUNT=$(find "$BACKUP_BASE_DIRECTORY" -maxdepth 1 -name "*.zip" -type f | wc -l)
+	if (( BACKUP_COUNT > 8 )); then
+		# Sort by modification time, keep the 8 newest, delete the rest
+		find "$BACKUP_BASE_DIRECTORY" -maxdepth 1 -name "*.zip" -type f -printf '%T@ %p\n' | \
+			sort -rn | tail -n "+9" | cut -d' ' -f2- | while read -r old_backup; do
+				rm -f -- "$old_backup"
+				printf 'Deleted old backup: %s\n' "$old_backup"
+			done
+	fi
+
+	printf 'Backup completed successfully for server %s (mission: %s)\n' "$SERVER_NAME" "$ACTIVE_MISSION"
+}
+
+# Function to restore from latest backup
+auto_recover() {
+	printf 'Starting auto_recover: Creating error backup first...\n'
+
+	# Create error backup (same as normal backup but with ERROR_ prefix)
+	ERROR_BACKUP_FOLDER="$BACKUP_BASE_DIRECTORY/ERROR_$(date '+%Y%m%d_%H%M%S')"
+	mkdir -p -- "$ERROR_BACKUP_FOLDER"
+
+	cp -a -- "$MISSION_FOLDER" "$ERROR_BACKUP_FOLDER/"
+	cp -a -- "$PROFILES_DIRECTORY" "$ERROR_BACKUP_FOLDER/"
+	cp -a -- "$BATTLEYE_DIRECTORY" "$ERROR_BACKUP_FOLDER/"
+	cp -- "$SERVER_CONFIG_FILE" "$ERROR_BACKUP_FOLDER/"
+
+	ERROR_BACKUP_FILE="$BACKUP_BASE_DIRECTORY/ERROR_$(date '+%Y%m%d_%H%M%S').zip"
+	cd -- "$BACKUP_BASE_DIRECTORY" || exit 1
+	zip -r "$(basename "$ERROR_BACKUP_FILE")" "ERROR_$(basename "$ERROR_BACKUP_FOLDER")" >/dev/null 2>&1
+	rm -rf -- "$ERROR_BACKUP_FOLDER"
+	printf 'Created error backup: %s\n' "$ERROR_BACKUP_FILE"
+
+	# Find the latest backup (most recent .zip file, excluding ERROR_*)
+	printf 'Finding latest backup...\n'
+	LATEST_BACKUP=$(find "$BACKUP_BASE_DIRECTORY" -maxdepth 1 -name "*.zip" -type f ! -name "ERROR_*" -printf '%T@ %p\n' | sort -rn | head -1 | cut -d' ' -f2-)
+	
+	if [[ -z "$LATEST_BACKUP" ]]; then
+		printf 'No backup found to restore from!\n' >&2
+		exit 1
+	fi
+
+	printf 'Restoring from: %s\n' "$LATEST_BACKUP"
+
+	# Extract backup to temporary location
+	RESTORE_TEMP="$BACKUP_BASE_DIRECTORY/restore_temp_$$"
+	mkdir -p -- "$RESTORE_TEMP"
+	unzip -q "$LATEST_BACKUP" -d "$RESTORE_TEMP"
+
+	# Find the backup folder name inside the zip
+	BACKUP_FOLDER_NAME=$(find "$RESTORE_TEMP" -maxdepth 1 -type d ! -name "restore_temp_$$" | head -1)
+	if [[ -z "$BACKUP_FOLDER_NAME" ]]; then
+		printf 'Error: Invalid backup archive structure\n' >&2
+		rm -rf -- "$RESTORE_TEMP"
+		exit 1
+	fi
+
+	# Restore the data
+	printf 'Restoring mission folder...\n'
+	rm -rf -- "$MISSION_FOLDER"
+	cp -a -- "$BACKUP_FOLDER_NAME/$(basename "$ACTIVE_MISSION")" "$MPMISSION_DIRECTORY/"
+
+	printf 'Restoring profiles folder...\n'
+	rm -rf -- "$PROFILES_DIRECTORY"
+	cp -a -- "$BACKUP_FOLDER_NAME/profiles" "$SERVERDATA_DIRECTORY/"
+
+	printf 'Restoring battleye config...\n'
+	rm -rf -- "$BATTLEYE_DIRECTORY"
+	cp -a -- "$BACKUP_FOLDER_NAME/battleye" "$SERVERDATA_DIRECTORY/"
+
+	printf 'Restoring serverDZ.cfg...\n'
+	cp -- "$BACKUP_FOLDER_NAME/serverDZ.cfg" "$SERVER_CONFIG_FILE"
+
+	# Clean up
+	rm -rf -- "$RESTORE_TEMP"
+
+	printf 'Auto recover completed successfully!\n'
+}
+
+# Execute based on mode
+if [[ "$MODE" == "auto_recover" ]]; then
+	auto_recover
 else
-	printf 'Failed to create backup archive: %s\n' "$BACKUP_FILE" >&2
-	rm -rf -- "$BACKUP_FOLDER"
-	exit 1
+	create_backup
 fi
-
-# Clean up old backups, keep only the 8 most recent
-BACKUP_COUNT=$(find "$BACKUP_BASE_DIRECTORY" -maxdepth 1 -name "*.zip" -type f | wc -l)
-if (( BACKUP_COUNT > 8 )); then
-	# Sort by modification time, keep the 8 newest, delete the rest
-	find "$BACKUP_BASE_DIRECTORY" -maxdepth 1 -name "*.zip" -type f -printf '%T@ %p\n' | \
-		sort -rn | tail -n "+9" | cut -d' ' -f2- | while read -r old_backup; do
-			rm -f -- "$old_backup"
-			printf 'Deleted old backup: %s\n' "$old_backup"
-		done
-fi
-
-printf 'Backup completed successfully for server %s (mission: %s)\n' "$SERVER_NAME" "$ACTIVE_MISSION"
