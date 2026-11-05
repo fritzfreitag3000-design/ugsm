@@ -112,9 +112,9 @@ cp -a -- "$BATTLEYE_DIRECTORY" "$BACKUP_FOLDER/"
 cp -- "$SERVER_CONFIG_FILE" "$BACKUP_FOLDER/"
 
 # Compress the backup
-BACKUP_FILE="$BACKUP_BASE_DIRECTORY/$TIMESTAMP.tar.gz"
+BACKUP_FILE="$BACKUP_BASE_DIRECTORY/$TIMESTAMP.zip"
 cd -- "$BACKUP_FOLDER/.." || exit 1
-tar -czf "$TIMESTAMP.tar.gz" "$TIMESTAMP" 2>/dev/null
+zip -r "$TIMESTAMP.zip" "$TIMESTAMP" >/dev/null 2>&1
 if [[ -f "$BACKUP_FILE" ]]; then
 	rm -rf -- "$BACKUP_FOLDER"
 	printf 'Created backup: %s\n' "$BACKUP_FILE"
@@ -125,10 +125,10 @@ else
 fi
 
 # Clean up old backups, keep only the 8 most recent
-BACKUP_COUNT=$(find "$BACKUP_BASE_DIRECTORY" -maxdepth 1 -name "*.tar.gz" -type f | wc -l)
+BACKUP_COUNT=$(find "$BACKUP_BASE_DIRECTORY" -maxdepth 1 -name "*.zip" -type f | wc -l)
 if (( BACKUP_COUNT > 8 )); then
 	# Sort by modification time, keep the 8 newest, delete the rest
-	find "$BACKUP_BASE_DIRECTORY" -maxdepth 1 -name "*.tar.gz" -type f -printf '%T@ %p\n' | \
+	find "$BACKUP_BASE_DIRECTORY" -maxdepth 1 -name "*.zip" -type f -printf '%T@ %p\n' | \
 		sort -rn | tail -n "+9" | cut -d' ' -f2- | while read -r old_backup; do
 			rm -f -- "$old_backup"
 			printf 'Deleted old backup: %s\n' "$old_backup"
