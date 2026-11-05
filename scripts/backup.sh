@@ -280,10 +280,11 @@ recover() {
 	printf 'Selected: %s\n' "$(basename "$SELECTED_BACKUP")"
 
 	# Confirm restore
-	printf 'Create error backup and restore from selected backup? (yes/no): '
+	printf 'Create error backup and restore from selected backup? (yes/no/y/n): '
 	read -r CONFIRM
+	CONFIRM="${CONFIRM,,}"
 	printf '[DEBUG] Confirmation: %s\n' "$CONFIRM"
-	if [[ "$CONFIRM" != "yes" ]]; then
+	if [[ "$CONFIRM" != "yes" && "$CONFIRM" != "y" ]]; then
 		printf 'Recovery cancelled.\n'
 		exit 0
 	fi
