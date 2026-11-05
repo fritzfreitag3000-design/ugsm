@@ -156,7 +156,8 @@ auto_recover() {
 
 	# Create error backup (same as normal backup but with ERROR_ prefix)
 	printf '[DEBUG] Creating ERROR_BACKUP_FOLDER...\n'
-	ERROR_BACKUP_FOLDER="$BACKUP_BASE_DIRECTORY/ERROR_$(date '+%Y%m%d_%H%M%S')"
+	ERROR_BACKUP_TIMESTAMP="$(date '+%Y%m%d_%H%M%S')"
+	ERROR_BACKUP_FOLDER="$BACKUP_BASE_DIRECTORY/ERROR_$ERROR_BACKUP_TIMESTAMP"
 	printf '[DEBUG] ERROR_BACKUP_FOLDER=%s\n' "$ERROR_BACKUP_FOLDER"
 	mkdir -p -- "$ERROR_BACKUP_FOLDER"
 
@@ -170,10 +171,11 @@ auto_recover() {
 	cp -- "$SERVER_CONFIG_FILE" "$ERROR_BACKUP_FOLDER/"
 
 	printf '[DEBUG] Creating ZIP file of error backup...\n'
-	ERROR_BACKUP_FILE="$BACKUP_BASE_DIRECTORY/ERROR_$(date '+%Y%m%d_%H%M%S').zip"
+	ERROR_BACKUP_FILE="$BACKUP_BASE_DIRECTORY/ERROR_$ERROR_BACKUP_TIMESTAMP.zip"
 	cd -- "$BACKUP_BASE_DIRECTORY" || exit 1
-	printf '[DEBUG] Compressing: zip -r %s ERROR_%s\n' "$(basename "$ERROR_BACKUP_FILE")" "$(basename "$ERROR_BACKUP_FOLDER")"
-	zip -r "$(basename "$ERROR_BACKUP_FILE")" "ERROR_$(basename "$ERROR_BACKUP_FOLDER")" >/dev/null 2>&1
+	printf '[DEBUG] Compressing: zip -r %s %s\n' "$(basename "$ERROR_BACKUP_FILE")" "$(basename "$ERROR_BACKUP_FOLDER")"
+	zip -r "$(basename "$ERROR_BACKUP_FILE")" "$(basename "$ERROR_BACKUP_FOLDER")" >/dev/null 2>&1
+	printf '[DEBUG] Zip completed, exit code: %d\n' $?
 	printf '[DEBUG] Removing error backup folder...\n'
 	rm -rf -- "$ERROR_BACKUP_FOLDER"
 	printf 'Created error backup: %s\n' "$ERROR_BACKUP_FILE"
@@ -290,7 +292,8 @@ recover() {
 
 	# Create error backup (same as normal backup but with ERROR_ prefix)
 	printf '[DEBUG] Creating ERROR_BACKUP_FOLDER...\n'
-	ERROR_BACKUP_FOLDER="$BACKUP_BASE_DIRECTORY/ERROR_$(date '+%Y%m%d_%H%M%S')"
+	ERROR_BACKUP_TIMESTAMP="$(date '+%Y%m%d_%H%M%S')"
+	ERROR_BACKUP_FOLDER="$BACKUP_BASE_DIRECTORY/ERROR_$ERROR_BACKUP_TIMESTAMP"
 	mkdir -p -- "$ERROR_BACKUP_FOLDER"
 
 	printf '[DEBUG] Copying data to error backup...\n'
@@ -300,9 +303,10 @@ recover() {
 	cp -- "$SERVER_CONFIG_FILE" "$ERROR_BACKUP_FOLDER/"
 
 	printf '[DEBUG] Creating ZIP of error backup...\n'
-	ERROR_BACKUP_FILE="$BACKUP_BASE_DIRECTORY/ERROR_$(date '+%Y%m%d_%H%M%S').zip"
+	ERROR_BACKUP_FILE="$BACKUP_BASE_DIRECTORY/ERROR_$ERROR_BACKUP_TIMESTAMP.zip"
 	cd -- "$BACKUP_BASE_DIRECTORY" || exit 1
-	zip -r "$(basename "$ERROR_BACKUP_FILE")" "ERROR_$(basename "$ERROR_BACKUP_FOLDER")" >/dev/null 2>&1
+	zip -r "$(basename "$ERROR_BACKUP_FILE")" "$(basename "$ERROR_BACKUP_FOLDER")" >/dev/null 2>&1
+	printf '[DEBUG] Zip completed, exit code: %d\n' $?
 	rm -rf -- "$ERROR_BACKUP_FOLDER"
 	printf 'Created error backup: %s\n' "$ERROR_BACKUP_FILE"
 
