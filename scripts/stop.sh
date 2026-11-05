@@ -138,6 +138,20 @@ wait_for_stop() {
 server_stopped() {
 	set_server_state stop
 	printf 'Server stopped.\n'
+	
+	# Create backup after successful RCON shutdown
+	printf 'Creating backup...\n'
+	BACKUP_SCRIPT="$PROJECT_DIRECTORY/scripts/backup.sh"
+	if [[ -x "$BACKUP_SCRIPT" ]]; then
+		if [[ "$(id -un)" == "$NEW_USER" ]]; then
+			"$BACKUP_SCRIPT"
+		else
+			sudo -u "$NEW_USER" "$BACKUP_SCRIPT"
+		fi
+	else
+		printf 'Warning: backup.sh not found or not executable: %s\n' "$BACKUP_SCRIPT" >&2
+	fi
+	
 	exit 0
 }
 
