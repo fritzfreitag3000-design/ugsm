@@ -4,7 +4,11 @@ set -euo pipefail
 # Checks every minute whether one of the restart times from
 # config/scheduler.conf has been reached. With AUTO_RECOVER=1 it also checks
 # that the server is healthy and restarts it if it is not.
-# Usage: scheduler.sh
+# Usage: scheduler.sh start|stop|status
+#   start   runs the scheduler in a background tmux session
+#   stop    ends that session
+#   status  shows whether the session is running
+# The state is stored as SCHEDULER_STATE in the server config.
 
 SCRIPT_DIRECTORY="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIRECTORY="$(cd -- "$SCRIPT_DIRECTORY/.." && pwd)"
@@ -12,6 +16,7 @@ SERVER_DIRECTORY="$(cd -- "$PROJECT_DIRECTORY/.." && pwd)"
 SERVER_NAME="$(basename -- "$SERVER_DIRECTORY")"
 SCHEDULER_CONFIG="$PROJECT_DIRECTORY/config/scheduler.conf"
 SERVER_CONFIG="$PROJECT_DIRECTORY/install/${SERVER_NAME}_server.conf"
+SESSION_NAME="${SERVER_NAME}_scheduler"
 
 if [[ ! -r "$SCHEDULER_CONFIG" ]]; then
 	printf 'Config file is missing or unreadable: %s\n' "$SCHEDULER_CONFIG" >&2
@@ -97,19 +102,92 @@ restart_due() {
 	return 1
 }
 
-last_checked=""
-while true; do
-	now="$(date +%H:%M)"
-	if [[ "$now" != "$last_checked" ]]; then
-		last_checked="$now"
-		if restart_due "$now"; then
-			printf '[%s] Restart time reached.\n' "$now"
-			restart_server
-		elif [[ "$(read_setting "$SCHEDULER_CONFIG" AUTO_RECOVER)" == "1" ]] && reason="$(server_unhealthy)"; then
-			printf '[%s] Auto recover: %s Restarting.\n' "$now" "$reason"
-			restart_server
+run_loop() {
+	local last_checked="" now reason
+	while true; do
+		now="$(date +%H:%M)"
+		if [[ "$now" != "$last_checked" ]]; then
+			last_checked="$now"
+			if restart_due "$now"; then
+				printf '[%s] Restart time reached.\n' "$now"
+				restart_server
+			elif [[ "$(read_setting "$SCHEDULER_CONFIG" AUTO_RECOVER)" == "1" ]] && reason="$(server_unhealthy)"; then
+				printf '[%s] Auto recover: %s Restarting.\n' "$now" "$reason"
+				restart_server
+			fi
 		fi
+		# Sleep until the start of the next minute.
+		sleep $((60 - 10#$(date +%S)))
+	done
+}
+
+# Write SCHEDULER_STATE (1|0) to the server config.
+set_scheduler_state() {
+	local state="$1" temp_file
+	temp_file="$(mktemp "${SERVER_CONFIG}.XXXXXX")" || return 1
+	if ! STATE_VALUE="$state" awk -v key=SCHEDULER_STATE '
+	BEGIN { value = ENVIRON["STATE_VALUE"] }
+	{
+		separator = index($0, "=")
+		if (separator > 0) {
+			name = substr($0, 1, separator - 1)
+			gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
+			if (name == key) {
+				if (!written) print key "=" value
+				written = 1
+				next
+			}
+		}
+		print
+	}
+	END {
+		if (!written) print key "=" value
+	}' "$SERVER_CONFIG" > "$temp_file" \
+		|| ! chmod --reference="$SERVER_CONFIG" "$temp_file" \
+		|| ! mv -- "$temp_file" "$SERVER_CONFIG"; then
+		rm -f -- "$temp_file"
+		printf 'Could not update SCHEDULER_STATE in %s.\n' "$SERVER_CONFIG" >&2
+		return 1
 	fi
-	# Sleep until the start of the next minute.
-	sleep $((60 - 10#$(date +%S)))
-done
+}
+
+session_active() {
+	tmux has-session -t "=$SESSION_NAME" 2>/dev/null
+}
+
+case "${1:-}" in
+	start)
+		command -v tmux >/dev/null 2>&1 || { printf 'tmux is not installed.\n' >&2; exit 1; }
+		if session_active; then
+			printf 'Scheduler is already running in tmux session "%s".\n' "$SESSION_NAME" >&2
+			exit 1
+		fi
+		tmux new-session -d -s "$SESSION_NAME" -c "$SCRIPT_DIRECTORY" "$(printf 'exec %q run' "$SCRIPT_DIRECTORY/scheduler.sh")"
+		set_scheduler_state 1
+		printf 'Scheduler started in tmux session "%s". Attach with: tmux attach -t %s\n' "$SESSION_NAME" "$SESSION_NAME"
+		;;
+	stop)
+		if session_active; then
+			tmux kill-session -t "=$SESSION_NAME"
+			printf 'Scheduler stopped.\n'
+		else
+			printf 'Scheduler is not running.\n'
+		fi
+		set_scheduler_state 0
+		;;
+	status)
+		if session_active; then
+			printf 'Scheduler is running in tmux session "%s".\n' "$SESSION_NAME"
+		else
+			printf 'Scheduler is not running.\n'
+		fi
+		;;
+	run)
+		# Internal: runs inside the tmux session.
+		run_loop
+		;;
+	*)
+		printf 'Usage: %s start|stop|status\n' "$0" >&2
+		exit 1
+		;;
+esac
