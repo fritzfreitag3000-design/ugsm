@@ -155,23 +155,34 @@ auto_recover() {
 	printf 'Starting auto_recover: Creating error backup first...\n'
 
 	# Create error backup (same as normal backup but with ERROR_ prefix)
+	printf '[DEBUG] Creating ERROR_BACKUP_FOLDER...\n'
 	ERROR_BACKUP_FOLDER="$BACKUP_BASE_DIRECTORY/ERROR_$(date '+%Y%m%d_%H%M%S')"
+	printf '[DEBUG] ERROR_BACKUP_FOLDER=%s\n' "$ERROR_BACKUP_FOLDER"
 	mkdir -p -- "$ERROR_BACKUP_FOLDER"
 
+	printf '[DEBUG] Copying mission folder to error backup...\n'
 	cp -a -- "$MISSION_FOLDER" "$ERROR_BACKUP_FOLDER/"
+	printf '[DEBUG] Copying profiles to error backup...\n'
 	cp -a -- "$PROFILES_DIRECTORY" "$ERROR_BACKUP_FOLDER/"
+	printf '[DEBUG] Copying battleye to error backup...\n'
 	cp -a -- "$BATTLEYE_DIRECTORY" "$ERROR_BACKUP_FOLDER/"
+	printf '[DEBUG] Copying serverDZ.cfg to error backup...\n'
 	cp -- "$SERVER_CONFIG_FILE" "$ERROR_BACKUP_FOLDER/"
 
+	printf '[DEBUG] Creating ZIP file of error backup...\n'
 	ERROR_BACKUP_FILE="$BACKUP_BASE_DIRECTORY/ERROR_$(date '+%Y%m%d_%H%M%S').zip"
 	cd -- "$BACKUP_BASE_DIRECTORY" || exit 1
+	printf '[DEBUG] Compressing: zip -r %s ERROR_%s\n' "$(basename "$ERROR_BACKUP_FILE")" "$(basename "$ERROR_BACKUP_FOLDER")"
 	zip -r "$(basename "$ERROR_BACKUP_FILE")" "ERROR_$(basename "$ERROR_BACKUP_FOLDER")" >/dev/null 2>&1
+	printf '[DEBUG] Removing error backup folder...\n'
 	rm -rf -- "$ERROR_BACKUP_FOLDER"
 	printf 'Created error backup: %s\n' "$ERROR_BACKUP_FILE"
 
 	# Find the latest backup (most recent .zip file, excluding ERROR_*)
 	printf 'Finding latest backup...\n'
+	printf '[DEBUG] Searching in: %s\n' "$BACKUP_BASE_DIRECTORY"
 	LATEST_BACKUP=$(find "$BACKUP_BASE_DIRECTORY" -maxdepth 1 -name "*.zip" -type f ! -name "ERROR_*" -printf '%T@ %p\n' | sort -rn | head -1 | cut -d' ' -f2-)
+	printf '[DEBUG] LATEST_BACKUP=%s\n' "$LATEST_BACKUP"
 	
 	if [[ -z "$LATEST_BACKUP" ]]; then
 		printf 'No backup found to restore from!\n' >&2
@@ -181,12 +192,16 @@ auto_recover() {
 	printf 'Restoring from: %s\n' "$LATEST_BACKUP"
 
 	# Extract backup to temporary location
+	printf '[DEBUG] Creating restore temp directory...\n'
 	RESTORE_TEMP="$BACKUP_BASE_DIRECTORY/restore_temp_$$"
 	mkdir -p -- "$RESTORE_TEMP"
+	printf '[DEBUG] Extracting backup...\n'
 	unzip -q "$LATEST_BACKUP" -d "$RESTORE_TEMP"
 
 	# Find the backup folder name inside the zip
+	printf '[DEBUG] Finding backup folder inside zip...\n'
 	BACKUP_FOLDER_NAME=$(find "$RESTORE_TEMP" -maxdepth 1 -type d ! -name "restore_temp_$$" | head -1)
+	printf '[DEBUG] BACKUP_FOLDER_NAME=%s\n' "$BACKUP_FOLDER_NAME"
 	if [[ -z "$BACKUP_FOLDER_NAME" ]]; then
 		printf 'Error: Invalid backup archive structure\n' >&2
 		rm -rf -- "$RESTORE_TEMP"
@@ -195,21 +210,29 @@ auto_recover() {
 
 	# Restore the data
 	printf 'Restoring mission folder...\n'
+	printf '[DEBUG] Removing old mission folder: %s\n' "$MISSION_FOLDER"
 	rm -rf -- "$MISSION_FOLDER"
+	printf '[DEBUG] Copying mission from backup: %s/%s to %s\n' "$BACKUP_FOLDER_NAME" "$(basename "$ACTIVE_MISSION")" "$MPMISSION_DIRECTORY"
 	cp -a -- "$BACKUP_FOLDER_NAME/$(basename "$ACTIVE_MISSION")" "$MPMISSION_DIRECTORY/"
 
 	printf 'Restoring profiles folder...\n'
+	printf '[DEBUG] Removing old profiles: %s\n' "$PROFILES_DIRECTORY"
 	rm -rf -- "$PROFILES_DIRECTORY"
+	printf '[DEBUG] Copying profiles from backup\n'
 	cp -a -- "$BACKUP_FOLDER_NAME/profiles" "$SERVERDATA_DIRECTORY/"
 
 	printf 'Restoring battleye config...\n'
+	printf '[DEBUG] Removing old battleye: %s\n' "$BATTLEYE_DIRECTORY"
 	rm -rf -- "$BATTLEYE_DIRECTORY"
+	printf '[DEBUG] Copying battleye from backup\n'
 	cp -a -- "$BACKUP_FOLDER_NAME/battleye" "$SERVERDATA_DIRECTORY/"
 
 	printf 'Restoring serverDZ.cfg...\n'
+	printf '[DEBUG] Copying serverDZ.cfg from backup\n'
 	cp -- "$BACKUP_FOLDER_NAME/serverDZ.cfg" "$SERVER_CONFIG_FILE"
 
 	# Clean up
+	printf '[DEBUG] Cleaning up temporary restore folder\n'
 	rm -rf -- "$RESTORE_TEMP"
 
 	printf 'Auto recover completed successfully!\n'
@@ -217,13 +240,16 @@ auto_recover() {
 
 # Function to restore from selected backup
 recover() {
+	printf '[DEBUG] Starting recover function\n'
 	printf 'Available backups:\n'
 	printf '==================\n'
 
 	# List all backups and store them in an array
+	printf '[DEBUG] Searching for backups in: %s\n' "$BACKUP_BASE_DIRECTORY"
 	BACKUPS=()
 	INDEX=1
 	while IFS= read -r backup_file; do
+		printf '[DEBUG] Found backup: %s\n' "$backup_file"
 		BACKUP_SIZE=$(du -h "$backup_file" | cut -f1)
 		BACKUP_DATE=$(stat -c '%y' "$backup_file" 2>/dev/null | cut -d' ' -f1,2 || stat -f '%Sm' "$backup_file" 2>/dev/null)
 		printf '%d) %s (%s) - %s\n' "$INDEX" "$(basename "$backup_file")" "$BACKUP_SIZE" "$BACKUP_DATE"
@@ -231,6 +257,7 @@ recover() {
 		((INDEX++))
 	done < <(find "$BACKUP_BASE_DIRECTORY" -maxdepth 1 -name "*.zip" -type f ! -name "ERROR_*" -printf '%T@ %p\n' | sort -rn | cut -d' ' -f2-)
 
+	printf '[DEBUG] Total backups found: %d\n' "${#BACKUPS[@]}"
 	if [[ ${#BACKUPS[@]} -eq 0 ]]; then
 		printf 'No backups found!\n' >&2
 		exit 1
@@ -239,6 +266,7 @@ recover() {
 	printf '\n'
 	printf 'Select a backup to restore (enter number): '
 	read -r CHOICE
+	printf '[DEBUG] User selected: %s\n' "$CHOICE"
 
 	# Validate input
 	if ! [[ "$CHOICE" =~ ^[0-9]+$ ]] || (( CHOICE < 1 || CHOICE > ${#BACKUPS[@]} )); then
@@ -252,6 +280,7 @@ recover() {
 	# Confirm restore
 	printf 'Create error backup and restore from selected backup? (yes/no): '
 	read -r CONFIRM
+	printf '[DEBUG] Confirmation: %s\n' "$CONFIRM"
 	if [[ "$CONFIRM" != "yes" ]]; then
 		printf 'Recovery cancelled.\n'
 		exit 0
@@ -260,14 +289,17 @@ recover() {
 	printf 'Starting recovery: Creating error backup first...\n'
 
 	# Create error backup (same as normal backup but with ERROR_ prefix)
+	printf '[DEBUG] Creating ERROR_BACKUP_FOLDER...\n'
 	ERROR_BACKUP_FOLDER="$BACKUP_BASE_DIRECTORY/ERROR_$(date '+%Y%m%d_%H%M%S')"
 	mkdir -p -- "$ERROR_BACKUP_FOLDER"
 
+	printf '[DEBUG] Copying data to error backup...\n'
 	cp -a -- "$MISSION_FOLDER" "$ERROR_BACKUP_FOLDER/"
 	cp -a -- "$PROFILES_DIRECTORY" "$ERROR_BACKUP_FOLDER/"
 	cp -a -- "$BATTLEYE_DIRECTORY" "$ERROR_BACKUP_FOLDER/"
 	cp -- "$SERVER_CONFIG_FILE" "$ERROR_BACKUP_FOLDER/"
 
+	printf '[DEBUG] Creating ZIP of error backup...\n'
 	ERROR_BACKUP_FILE="$BACKUP_BASE_DIRECTORY/ERROR_$(date '+%Y%m%d_%H%M%S').zip"
 	cd -- "$BACKUP_BASE_DIRECTORY" || exit 1
 	zip -r "$(basename "$ERROR_BACKUP_FILE")" "ERROR_$(basename "$ERROR_BACKUP_FOLDER")" >/dev/null 2>&1
@@ -277,12 +309,16 @@ recover() {
 	printf 'Restoring from: %s\n' "$(basename "$SELECTED_BACKUP")"
 
 	# Extract backup to temporary location
+	printf '[DEBUG] Creating temp restore directory...\n'
 	RESTORE_TEMP="$BACKUP_BASE_DIRECTORY/restore_temp_$$"
 	mkdir -p -- "$RESTORE_TEMP"
+	printf '[DEBUG] Extracting selected backup...\n'
 	unzip -q "$SELECTED_BACKUP" -d "$RESTORE_TEMP"
 
 	# Find the backup folder name inside the zip
+	printf '[DEBUG] Finding backup folder in zip...\n'
 	BACKUP_FOLDER_NAME=$(find "$RESTORE_TEMP" -maxdepth 1 -type d ! -name "restore_temp_$$" | head -1)
+	printf '[DEBUG] BACKUP_FOLDER_NAME=%s\n' "$BACKUP_FOLDER_NAME"
 	if [[ -z "$BACKUP_FOLDER_NAME" ]]; then
 		printf 'Error: Invalid backup archive structure\n' >&2
 		rm -rf -- "$RESTORE_TEMP"
@@ -291,21 +327,26 @@ recover() {
 
 	# Restore the data
 	printf 'Restoring mission folder...\n'
+	printf '[DEBUG] Removing old mission and restoring...\n'
 	rm -rf -- "$MISSION_FOLDER"
 	cp -a -- "$BACKUP_FOLDER_NAME/$(basename "$ACTIVE_MISSION")" "$MPMISSION_DIRECTORY/"
 
 	printf 'Restoring profiles folder...\n'
+	printf '[DEBUG] Removing old profiles and restoring...\n'
 	rm -rf -- "$PROFILES_DIRECTORY"
 	cp -a -- "$BACKUP_FOLDER_NAME/profiles" "$SERVERDATA_DIRECTORY/"
 
 	printf 'Restoring battleye config...\n'
+	printf '[DEBUG] Removing old battleye and restoring...\n'
 	rm -rf -- "$BATTLEYE_DIRECTORY"
 	cp -a -- "$BACKUP_FOLDER_NAME/battleye" "$SERVERDATA_DIRECTORY/"
 
 	printf 'Restoring serverDZ.cfg...\n'
+	printf '[DEBUG] Restoring serverDZ.cfg...\n'
 	cp -- "$BACKUP_FOLDER_NAME/serverDZ.cfg" "$SERVER_CONFIG_FILE"
 
 	# Clean up
+	printf '[DEBUG] Cleaning up temp folder\n'
 	rm -rf -- "$RESTORE_TEMP"
 
 	printf 'Recovery from %s completed successfully!\n' "$(basename "$SELECTED_BACKUP")"
