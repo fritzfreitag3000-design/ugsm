@@ -8,16 +8,17 @@ set -euo pipefail
 # Usage: 
 #   backup.sh              - Create a new backup
 #   backup.sh auto_recover - Restore from the latest backup (creates error backup first)
+#   backup.sh recover      - Choose a backup from list and restore it
 
 if [[ "$#" -gt 1 ]]; then
-	printf 'Usage: %s [auto_recover]\n' "$0" >&2
+	printf 'Usage: %s [auto_recover|recover]\n' "$0" >&2
 	exit 2
 fi
 
 MODE="${1:-backup}"
-if [[ "$MODE" != "backup" && "$MODE" != "auto_recover" ]]; then
+if [[ "$MODE" != "backup" && "$MODE" != "auto_recover" && "$MODE" != "recover" ]]; then
 	printf 'Invalid mode: %s\n' "$MODE" >&2
-	printf 'Usage: %s [auto_recover]\n' "$0" >&2
+	printf 'Usage: %s [auto_recover|recover]\n' "$0" >&2
 	exit 2
 fi
 
@@ -214,9 +215,107 @@ auto_recover() {
 	printf 'Auto recover completed successfully!\n'
 }
 
+# Function to restore from selected backup
+recover() {
+	printf 'Available backups:\n'
+	printf '==================\n'
+
+	# List all backups and store them in an array
+	BACKUPS=()
+	INDEX=1
+	while IFS= read -r backup_file; do
+		BACKUP_SIZE=$(du -h "$backup_file" | cut -f1)
+		BACKUP_DATE=$(stat -c '%y' "$backup_file" 2>/dev/null | cut -d' ' -f1,2 || stat -f '%Sm' "$backup_file" 2>/dev/null)
+		printf '%d) %s (%s) - %s\n' "$INDEX" "$(basename "$backup_file")" "$BACKUP_SIZE" "$BACKUP_DATE"
+		BACKUPS+=("$backup_file")
+		((INDEX++))
+	done < <(find "$BACKUP_BASE_DIRECTORY" -maxdepth 1 -name "*.zip" -type f ! -name "ERROR_*" -printf '%T@ %p\n' | sort -rn | cut -d' ' -f2-)
+
+	if [[ ${#BACKUPS[@]} -eq 0 ]]; then
+		printf 'No backups found!\n' >&2
+		exit 1
+	fi
+
+	printf '\n'
+	printf 'Select a backup to restore (enter number): '
+	read -r CHOICE
+
+	# Validate input
+	if ! [[ "$CHOICE" =~ ^[0-9]+$ ]] || (( CHOICE < 1 || CHOICE > ${#BACKUPS[@]} )); then
+		printf 'Invalid selection!\n' >&2
+		exit 1
+	fi
+
+	SELECTED_BACKUP="${BACKUPS[$((CHOICE - 1))]}"
+	printf 'Selected: %s\n' "$(basename "$SELECTED_BACKUP")"
+
+	# Confirm restore
+	printf 'Create error backup and restore from selected backup? (yes/no): '
+	read -r CONFIRM
+	if [[ "$CONFIRM" != "yes" ]]; then
+		printf 'Recovery cancelled.\n'
+		exit 0
+	fi
+
+	printf 'Starting recovery: Creating error backup first...\n'
+
+	# Create error backup (same as normal backup but with ERROR_ prefix)
+	ERROR_BACKUP_FOLDER="$BACKUP_BASE_DIRECTORY/ERROR_$(date '+%Y%m%d_%H%M%S')"
+	mkdir -p -- "$ERROR_BACKUP_FOLDER"
+
+	cp -a -- "$MISSION_FOLDER" "$ERROR_BACKUP_FOLDER/"
+	cp -a -- "$PROFILES_DIRECTORY" "$ERROR_BACKUP_FOLDER/"
+	cp -a -- "$BATTLEYE_DIRECTORY" "$ERROR_BACKUP_FOLDER/"
+	cp -- "$SERVER_CONFIG_FILE" "$ERROR_BACKUP_FOLDER/"
+
+	ERROR_BACKUP_FILE="$BACKUP_BASE_DIRECTORY/ERROR_$(date '+%Y%m%d_%H%M%S').zip"
+	cd -- "$BACKUP_BASE_DIRECTORY" || exit 1
+	zip -r "$(basename "$ERROR_BACKUP_FILE")" "ERROR_$(basename "$ERROR_BACKUP_FOLDER")" >/dev/null 2>&1
+	rm -rf -- "$ERROR_BACKUP_FOLDER"
+	printf 'Created error backup: %s\n' "$ERROR_BACKUP_FILE"
+
+	printf 'Restoring from: %s\n' "$(basename "$SELECTED_BACKUP")"
+
+	# Extract backup to temporary location
+	RESTORE_TEMP="$BACKUP_BASE_DIRECTORY/restore_temp_$$"
+	mkdir -p -- "$RESTORE_TEMP"
+	unzip -q "$SELECTED_BACKUP" -d "$RESTORE_TEMP"
+
+	# Find the backup folder name inside the zip
+	BACKUP_FOLDER_NAME=$(find "$RESTORE_TEMP" -maxdepth 1 -type d ! -name "restore_temp_$$" | head -1)
+	if [[ -z "$BACKUP_FOLDER_NAME" ]]; then
+		printf 'Error: Invalid backup archive structure\n' >&2
+		rm -rf -- "$RESTORE_TEMP"
+		exit 1
+	fi
+
+	# Restore the data
+	printf 'Restoring mission folder...\n'
+	rm -rf -- "$MISSION_FOLDER"
+	cp -a -- "$BACKUP_FOLDER_NAME/$(basename "$ACTIVE_MISSION")" "$MPMISSION_DIRECTORY/"
+
+	printf 'Restoring profiles folder...\n'
+	rm -rf -- "$PROFILES_DIRECTORY"
+	cp -a -- "$BACKUP_FOLDER_NAME/profiles" "$SERVERDATA_DIRECTORY/"
+
+	printf 'Restoring battleye config...\n'
+	rm -rf -- "$BATTLEYE_DIRECTORY"
+	cp -a -- "$BACKUP_FOLDER_NAME/battleye" "$SERVERDATA_DIRECTORY/"
+
+	printf 'Restoring serverDZ.cfg...\n'
+	cp -- "$BACKUP_FOLDER_NAME/serverDZ.cfg" "$SERVER_CONFIG_FILE"
+
+	# Clean up
+	rm -rf -- "$RESTORE_TEMP"
+
+	printf 'Recovery from %s completed successfully!\n' "$(basename "$SELECTED_BACKUP")"
+}
+
 # Execute based on mode
 if [[ "$MODE" == "auto_recover" ]]; then
 	auto_recover
+elif [[ "$MODE" == "recover" ]]; then
+	recover
 else
 	create_backup
 fi
