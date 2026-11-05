@@ -143,7 +143,7 @@ server_stopped() {
 
 set_server_state stopping
 
-# Warn the players via BattlEye RCON, then shut the server down via RCON.
+# Lock the server, warn the players via BattlEye RCON, then shut it down via RCON.
 RCON_PORT="$(read_setting "$SERVER_CONFIG" RCON_PORT)"
 RCON_PASS="$(read_setting "$SERVER_CONFIG" RCON_PASS)"
 RCON_HOST="$(read_setting "$SERVER_CONFIG" SERVER_IP)"
@@ -164,6 +164,25 @@ rcon_exec() {
 		exec -- "$@" >/dev/null
 }
 
+# Kick every connected player (BattlEye has no "kick all"): read the player
+# numbers from "players" and send the kick commands in batches.
+rcon_kick_all() {
+	local output ids=() args=() id
+	output="$(BERCON_PASSWORD="$RCON_PASS" bercon-cli --no-env --ip "$RCON_HOST" --port "$((10#$RCON_PORT))" 		--format raw exec -- players)" || return 1
+	mapfile -t ids < <(awk '$1 ~ /^[0-9]+$/ { print $1 }' <<< "$output")
+	for id in "${ids[@]}"; do
+		args+=("kick $id Server restart")
+		if (( ${#args[@]} >= 50 )); then
+			rcon_exec "${args[@]}" || return 1
+			args=()
+		fi
+	done
+	if (( ${#args[@]} > 0 )); then
+		rcon_exec "${args[@]}" || return 1
+	fi
+	printf 'Kicked %s player(s).\n' "${#ids[@]}"
+}
+
 rcon_say() {
 	local args=() message
 	for message in "$@"; do
@@ -173,20 +192,31 @@ rcon_say() {
 }
 
 if (( RCON_READY )); then
-	if rcon_say 'Server restarts in 60 seconds!' 'Server restarts in 60 seconds!' 'Server restarts in 60 seconds!'; then
-		printf 'Players were warned. Waiting 60 seconds...\n'
-		# 60 s in total: 30 s + 15 s + 5 s + 10 s countdown.
-		sleep 30
-		rcon_say 'Server restarts in 30 seconds!' || true
-		sleep 15
-		rcon_say 'Server restarts in 15 seconds!' || true
-		sleep 5
-		for ((second = 10; second >= 1; second--)); do
-			rcon_say "Server restarts in $second!" || true
-			sleep 1
-		done
+	if rcon_exec '#lock'; then
+		printf 'Locked the server to prevent new players from joining.\n'
+		if rcon_say 'Server restarts in 60 seconds!' 'Server restarts in 60 seconds!' 'Server restarts in 60 seconds!'; then
+			printf 'Players were warned. Waiting 60 seconds...\n'
+			# 60 s in total: 30 s + 15 s + 5 s + 10 s countdown.
+			sleep 30
+			rcon_say 'Server restarts in 30 seconds!' || true
+			sleep 15
+			rcon_say 'Server restarts in 15 seconds!' || true
+			sleep 5
+			for ((second = 10; second >= 1; second--)); do
+				rcon_say "Server restarts in $second!" || true
+				sleep 1
+			done
+		else
+			printf 'Warning: could not send the RCON message, players are not warned.\n' >&2
+		fi
 	else
-		printf 'Warning: could not send the RCON message, players are not warned.\n' >&2
+		printf 'Warning: could not lock the server; skipping player warnings.\n' >&2
+	fi
+
+	if rcon_kick_all; then
+		sleep 3
+	else
+		printf 'Warning: could not kick all players.\n' >&2
 	fi
 
 	if rcon_exec '#shutdown'; then
