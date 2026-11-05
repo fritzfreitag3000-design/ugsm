@@ -51,9 +51,9 @@ read_active_mission() {
 	awk '
 	/template[[:space:]]*=/ {
 		# Extract the value between quotes
-		match($0, /"([^"]+)"/, arr)
-		if (arr[1]) {
-			print arr[1]
+		if (match($0, /"[^"]+"/)) {
+			value = substr($0, RSTART + 1, RLENGTH - 2)
+			print value
 			exit
 		}
 	}' "$SERVER_CONFIG_FILE"
