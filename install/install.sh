@@ -57,6 +57,8 @@ REQUIRED_PACKAGES=(
 	sudo
 	ufw
 	util-linux
+	nodejs
+	npm
 )
 
 # Collect packages that are not installed yet.
@@ -96,6 +98,17 @@ if ! command -v bercon-cli >/dev/null 2>&1; then
 	rm -f -- "$BERCON_TEMP"
 else
 	printf 'bercon-cli is already installed.\n'
+fi
+
+# GameDig queries the Steam query port and prints the server status.
+if ! command -v gamedig >/dev/null 2>&1; then
+	printf 'Installing gamedig.\n'
+	if ! npm install -g gamedig; then
+		printf 'Could not install gamedig.\n' >&2
+		exit 1
+	fi
+else
+	printf 'gamedig is already installed.\n'
 fi
 
 # Set the paths for the source settings file and the install copy.

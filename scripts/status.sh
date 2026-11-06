@@ -38,27 +38,51 @@ read_setting() {
 	}' "$1"
 }
 
-# Check if a port is listening and responding.
-check_port() {
+# Check whether a local UDP socket is bound to the exact port.
+check_udp_socket() {
 	local port="$1"
-	if nc -zu localhost "$port" >/dev/null 2>&1; then
-		echo "✓ OPEN"
-		return 0
-	else
-		echo "✗ CLOSED"
+	if [[ ! "$port" =~ ^[0-9]{1,5}$ ]] || (( 10#$port < 1 || 10#$port > 65535 )); then
+		echo "⚠ INVALID PORT"
 		return 1
+	fi
+
+	if command -v ss &>/dev/null; then
+		if ss -H -u -l -n "sport = :$((10#$port))" 2>/dev/null | grep -q .; then
+			echo "✓ BOUND"
+		else
+			echo "✗ NOT BOUND"
+		fi
+	elif command -v netstat &>/dev/null; then
+		if netstat -uln 2>/dev/null | awk -v port="$((10#$port))" '$4 ~ (":" port "$") { found = 1 } END { exit !found }'; then
+			echo "✓ BOUND"
+		else
+			echo "✗ NOT BOUND"
+		fi
+	else
+		echo "? UNKNOWN (ss/netstat not available)"
 	fi
 }
 
-# Check if a process is listening on a specific port using netstat/ss.
-check_port_listening() {
-	local port="$1"
-	if command -v ss &>/dev/null; then
-		ss -uln 2>/dev/null | grep -q ":$port " && echo "✓ LISTENING" || echo "✗ NOT LISTENING"
-	elif command -v netstat &>/dev/null; then
-		netstat -uln 2>/dev/null | grep -q ":$port " && echo "✓ LISTENING" || echo "✗ NOT LISTENING"
+# Check whether the BattlEye RCON endpoint responds to an authenticated command.
+check_rcon_response() {
+	local server_ip="$1"
+	local port="$2"
+	local rcon_password="$3"
+	local rcon_host="$server_ip"
+
+	if ! command -v bercon-cli &>/dev/null; then
+		echo "? UNKNOWN (bercon-cli not available)"
+	elif [[ -z "$rcon_password" ]] || [[ ! "$port" =~ ^[0-9]{1,5}$ ]] || (( 10#$port < 1 || 10#$port > 65535 )); then
+		echo "? UNKNOWN (RCON configuration missing or invalid)"
 	else
-		echo "? UNKNOWN (ss/netstat not available)"
+		[[ -z "$rcon_host" || "$rcon_host" == "0.0.0.0" ]] && rcon_host="127.0.0.1"
+		if BERCON_PASSWORD="$rcon_password" bercon-cli --no-env --ip "$rcon_host" \
+			--port "$((10#$port))" --timeout 3s --attempts 1 --format raw exec -- players \
+			>/dev/null 2>&1; then
+			echo "✓ RESPONDING"
+		else
+			echo "✗ NO RESPONSE"
+		fi
 	fi
 }
 
@@ -103,8 +127,7 @@ parse_gamedig_output() {
 	printf "  Server Name: %s\n" "$(echo "$json" | jq -r '.name // "N/A"')"
 	printf "  Map: %s\n" "$(echo "$json" | jq -r '.map // "N/A"')"
 	printf "  Players: %s/%s\n" "$(echo "$json" | jq -r '.players | length // 0')" "$(echo "$json" | jq -r '.maxplayers // "N/A"')"
-	printf "  Game: %s\n" "$(echo "$json" | jq -r '.game // "N/A"')"
-	printf "  Server IP: %s:%s\n" "$(echo "$json" | jq -r '.connect // "N/A"')" "$(echo "$json" | jq -r '.port // "N/A"')"
+	printf "  Server IP: %s\n" "$(echo "$json" | jq -r '.connect // "N/A"')"
 	
 	local player_count=$(echo "$json" | jq -r '.players | length // 0')
 	if [[ "$player_count" -gt 0 ]]; then
@@ -127,6 +150,7 @@ SERVER_IP="$(read_setting "$SERVER_CONFIG" SERVER_IP)"
 GAME_PORT="$(read_setting "$SERVER_CONFIG" GAME_PORT)"
 RCON_PORT="$(read_setting "$SERVER_CONFIG" RCON_PORT)"
 STEAM_QUERY_PORT="$(read_setting "$SERVER_CONFIG" STEAM_QUERY_PORT)"
+RCON_PASS="$(read_setting "$SERVER_CONFIG" RCON_PASS)"
 NEW_USER="$(read_setting "$SERVER_CONFIG" NEW_USER)"
 
 # ============================================================================
@@ -162,19 +186,17 @@ printf "└───────────────────────
 
 printf "\n┌─ Port Configuration & Status ──────────────────────────────────────┐\n"
 
-printf "│ Game Port (UDP %s:%s)\n" "$SERVER_IP" "$GAME_PORT"
-printf "│   Listening: " && check_port_listening "$GAME_PORT"
-printf "│   Reachable: " && check_port "$GAME_PORT" || true
+printf "│ Game Port (UDP %s)\n" "$GAME_PORT"
+printf "│   Local socket: " && check_udp_socket "$GAME_PORT"
 printf "│\n"
 
-printf "│ RCON Port (UDP %s:%s)\n" "$SERVER_IP" "$RCON_PORT"
-printf "│   Listening: " && check_port_listening "$RCON_PORT"
-printf "│   Reachable: " && check_port "$RCON_PORT" || true
+printf "│ RCON Port (UDP %s)\n" "$RCON_PORT"
+printf "│   Local socket: " && check_udp_socket "$RCON_PORT"
+printf "│   RCON check: " && check_rcon_response "$SERVER_IP" "$RCON_PORT" "$RCON_PASS"
 printf "│\n"
 
-printf "│ Steam Query Port (UDP %s:%s)\n" "$SERVER_IP" "$STEAM_QUERY_PORT"
-printf "│   Listening: " && check_port_listening "$STEAM_QUERY_PORT"
-printf "│   Reachable: " && check_port "$STEAM_QUERY_PORT" || true
+printf "│ Steam Query Port (UDP %s)\n" "$STEAM_QUERY_PORT"
+printf "│   Local socket: " && check_udp_socket "$STEAM_QUERY_PORT"
 printf "│\n"
 
 printf "└────────────────────────────────────────────────────────────────────┘\n"
@@ -203,10 +225,12 @@ printf "└───────────────────────
 printf "\n┌─ GameDig Server Query ──────────────────────────────────────────────┐\n"
 
 if command -v gamedig &>/dev/null; then
-	printf "│ Querying server at %s:%s...\n" "$SERVER_IP" "$GAME_PORT"
+	QUERY_HOST="$SERVER_IP"
+	[[ -z "$QUERY_HOST" || "$QUERY_HOST" == "0.0.0.0" ]] && QUERY_HOST="127.0.0.1"
+	printf "│ Querying server at %s:%s...\n" "$QUERY_HOST" "$GAME_PORT"
 	printf "│\n"
 	
-	gamedig_output=$(query_gamedig "$SERVER_IP" "$GAME_PORT" 2>&1 || echo "")
+	gamedig_output=$(query_gamedig "$QUERY_HOST" "$GAME_PORT" 2>&1 || echo "")
 	
 	if [[ -n "$gamedig_output" ]]; then
 		parse_gamedig_output "$gamedig_output"
@@ -233,11 +257,11 @@ printf "│ Config File: %s\n" "$SERVER_CONFIG"
 
 # Show server process info if running.
 if [[ "$STATE" == "running" ]]; then
-	server_pid=$(pgrep -u "$NEW_USER" -f DayZServer 2>/dev/null || echo "")
-	if [[ -n "$server_pid" ]]; then
-		printf "│ Process ID: %s\n" "$server_pid"
-		printf "│ Memory Usage: %s\n" "$(ps -p "$server_pid" -o rss= 2>/dev/null | awk '{printf "%.1f MB", $1/1024}')"
-		printf "│ CPU Usage: %s\n" "$(ps -p "$server_pid" -o %%cpu= 2>/dev/null | xargs)"
+	mapfile -t server_pids < <(pgrep -u "$NEW_USER" -f DayZServer 2>/dev/null || true)
+	if (( ${#server_pids[@]} > 0 )); then
+		for server_pid in "${server_pids[@]}"; do
+			printf "│ Process ID: %s\n" "$server_pid"
+		done
 	fi
 fi
 
