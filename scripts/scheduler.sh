@@ -78,7 +78,7 @@ server_unhealthy() {
 		return 0
 	fi
 
-	if ! pgrep -u "$user" -x DayZServer >/dev/null 2>&1; then
+	if ! pgrep -u "$user" -f DayZServer >/dev/null 2>&1; then
 		printf 'DayZServer process is not running.\n'
 		return 0
 	fi
