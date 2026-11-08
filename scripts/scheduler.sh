@@ -60,7 +60,7 @@ restart_server() {
 check_udp_port_bound() {
 	local port="$1"
 	
-	if [[ ! "$port" =~ ^[0-9]{1,5}$ ]] || (( 10#$port < 1 || 10#$port > 65535 )); then
+	if [[ -z "$port" ]] || [[ ! "$port" =~ ^[0-9]{1,5}$ ]] || (( 10#$port < 1 || 10#$port > 65535 )); then
 		return 1
 	fi
 	
@@ -72,40 +72,64 @@ check_udp_port_bound() {
 	return 1
 }
 
-# Prints the first failed check and returns 0 if the server is unhealthy.
-# Returns 0 (unhealthy) if STATE != "running" or if any health check fails.
-server_unhealthy() {
-	local state user game_port steam_port rcon_port port
-	state="$(read_setting "$SERVER_CONFIG" STATE)"
-	if [[ "$state" != "running" ]]; then
-		printf 'Server is not running (STATE=%s).\n' "$state"
+# Performs detailed server health checks and displays results.
+# Returns 0 (unhealthy) if any check fails, 1 (healthy) if all pass.
+check_server_health() {
+	local state user game_port steam_port rcon_port port check_results=""
+	local health_status="✓ HEALTHY"
+	
+	# Validate config files exist
+	if [[ ! -r "$SERVER_CONFIG" ]]; then
+		printf '✗ UNHEALTHY | CONFIG: ✗ missing'
 		return 0
 	fi
+	
+	# Check 1: Server STATE
+	state="$(read_setting "$SERVER_CONFIG" STATE)" || state="unknown"
+	if [[ "$state" != "running" ]]; then
+		check_results+=" | STATE: ✗ $state"
+		health_status="✗ UNHEALTHY"
+	else
+		check_results+=" | STATE: ✓ running"
+	fi
+	
+	[[ "$state" != "running" ]] && { printf '%s%s' "$health_status" "$check_results"; return 0; }
 
-	user="$(read_setting "$SERVER_CONFIG" NEW_USER)"
-	game_port="$(read_setting "$SERVER_CONFIG" GAME_PORT)"
-	steam_port="$(read_setting "$SERVER_CONFIG" STEAM_QUERY_PORT)"
-	rcon_port="$(read_setting "$SERVER_CONFIG" RCON_PORT)"
+	user="$(read_setting "$SERVER_CONFIG" NEW_USER)" || user="unknown"
+	game_port="$(read_setting "$SERVER_CONFIG" GAME_PORT)" || game_port="0"
+	steam_port="$(read_setting "$SERVER_CONFIG" STEAM_QUERY_PORT)" || steam_port="0"
+	rcon_port="$(read_setting "$SERVER_CONFIG" RCON_PORT)" || rcon_port="0"
 
+	# Check 2: Tmux Session
 	local tmux_cmd=(tmux)
 	[[ "$(id -un)" != "$user" ]] && tmux_cmd=(sudo -u "$user" tmux)
-	if ! "${tmux_cmd[@]}" has-session -t "=$SERVER_NAME" 2>/dev/null; then
-		printf 'tmux session "%s" is not active.\n' "$SERVER_NAME"
-		return 0
+	if "${tmux_cmd[@]}" has-session -t "=$SERVER_NAME" 2>/dev/null; then
+		check_results+=" | TMUX: ✓ active"
+	else
+		check_results+=" | TMUX: ✗ missing"
+		health_status="✗ UNHEALTHY"
 	fi
-
-	if ! pgrep -u "$user" -f DayZServer >/dev/null 2>&1; then
-		printf 'DayZServer process is not running.\n'
-		return 0
+	
+	# Check 3: DayZServer Process
+	if pgrep -u "$user" -f DayZServer >/dev/null 2>&1; then
+		check_results+=" | PROC: ✓"
+	else
+		check_results+=" | PROC: ✗"
+		health_status="✗ UNHEALTHY"
 	fi
-
+	
+	# Check 4: UDP Ports
 	for port in "$game_port" "$steam_port" "$rcon_port"; do
-		if ! check_udp_port_bound "$port"; then
-			printf 'Port %s is not active.\n' "$((10#$port))"
-			return 0
+		if check_udp_port_bound "$port"; then
+			check_results+=" | PORT$((10#$port)): ✓"
+		else
+			check_results+=" | PORT$((10#$port)): ✗"
+			health_status="✗ UNHEALTHY"
 		fi
 	done
-	return 1
+	
+	printf '%s%s' "$health_status" "$check_results"
+	[[ "$health_status" == "✗ UNHEALTHY" ]] && return 0 || return 1
 }
 
 restart_due() {
@@ -157,13 +181,14 @@ run_loop() {
 				last_check_result="✓ Scheduled restart at $now"
 				printf '[%s] %-40s │ State: %-10s │ %s\n' "$now" "SCHEDULED RESTART" "$state_display" "Auto-Recover: $([[ "$auto_recover" == "1" ]] && echo "ON" || echo "OFF")"
 				restart_server
-			elif [[ "$auto_recover" == "1" ]] && reason="$(server_unhealthy)"; then
-				last_check_result="⚠ Auto-Recovery: $reason"
-				printf '[%s] %-40s │ State: %-10s │ %s\n' "$now" "AUTO-RECOVERY RESTART: $reason" "$state_display" "Auto-Recover: ON"
+			elif [[ "$auto_recover" == "1" ]] && health_result="$(check_server_health)" && [[ "$(echo "$health_result" | cut -d' ' -f1)" == "✗" ]]; then
+				last_check_result="⚠ Auto-Recovery triggered"
+				health_details="$(echo "$health_result" | cut -d' ' -f2-)"
+				printf '[%s] AUTO-RECOVERY RESTART: %s\n' "$now" "$health_details"
 				restart_server
 			else
-				last_check_result="✓ Server healthy"
-				printf '[%s] %-40s │ State: %-10s │ %s\n' "$now" "OK - Server running normally" "$state_display" "Auto-Recover: $([[ "$auto_recover" == "1" ]] && echo "ON" || echo "OFF")"
+				health_result="$(check_server_health)"
+				printf '[%s] %s\n' "$now" "$health_result"
 			fi
 		fi
 		# Sleep until the start of the next minute.
