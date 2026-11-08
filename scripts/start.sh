@@ -131,12 +131,13 @@ is_port() {
 
 SERVER_IP="$(read_setting "$SERVER_CONFIG" SERVER_IP)"
 GAME_PORT="$(read_setting "$SERVER_CONFIG" GAME_PORT)"
+RCON_PORT="$(read_setting "$SERVER_CONFIG" RCON_PORT)"
 STEAM_QUERY_PORT="$(read_setting "$SERVER_CONFIG" STEAM_QUERY_PORT)"
 if [[ -z "$SERVER_IP" ]] || ! python3 -c 'import ipaddress, sys; ipaddress.ip_address(sys.argv[1])' "$SERVER_IP" >/dev/null 2>&1; then
 	printf 'Invalid or missing SERVER_IP in %s.\n' "$SERVER_CONFIG" >&2
 	exit 1
 fi
-for name in GAME_PORT STEAM_QUERY_PORT; do
+for name in GAME_PORT RCON_PORT STEAM_QUERY_PORT; do
 	if ! is_port "${!name}"; then
 		printf 'Invalid or missing %s in %s.\n' "$name" "$SERVER_CONFIG" >&2
 		exit 1
@@ -233,7 +234,7 @@ if "${TMUX_CMD[@]}" has-session -t "=$SERVER_NAME" 2>/dev/null; then
 fi
 
 if command -v ss >/dev/null 2>&1; then
-	for port in "$((10#$GAME_PORT))" "$((10#$STEAM_QUERY_PORT))"; do
+	for port in "$((10#$GAME_PORT))" "$((10#$RCON_PORT))" "$((10#$STEAM_QUERY_PORT))"; do
 		if ss -H -lntu 2>/dev/null | awk -v p="$port" '{n = split($5, a, ":"); if (a[n] == p) found = 1} END {exit !found}'; then
 			printf 'Port %s is already in use.\n' "$port" >&2
 			exit 1
@@ -261,8 +262,8 @@ UFW_CMD=("$UFW_BIN")
 if ! UFW_STATUS="$("${UFW_CMD[@]}" status verbose 2>&1)"; then
 	printf 'Warning: Could not check UFW status; startup port blocking cannot be verified: %s\n' "$UFW_STATUS" >&2
 elif grep -Fqx 'Status: inactive' <<< "$UFW_STATUS"; then
-	printf 'Warning: UFW is inactive. UDP ports %s and %s will NOT be blocked during startup.\n' \
-		"$GAME_PORT" "$STEAM_QUERY_PORT" >&2
+	printf 'Warning: UFW is inactive. UDP ports %s, %s and %s will NOT be blocked during startup.\n' \
+		"$GAME_PORT" "$RCON_PORT" "$STEAM_QUERY_PORT" >&2
 elif grep -Fqx 'Status: active' <<< "$UFW_STATUS"; then
 	printf 'Warning: Removing allow rules does not guarantee startup port blocking; check the UFW policy and other rules.\n' >&2
 else
@@ -270,7 +271,7 @@ else
 fi
 
 # Removing allow rules only blocks traffic when other UFW rules and policy also deny it.
-for port in "$((10#$GAME_PORT))" "$((10#$STEAM_QUERY_PORT))"; do
+for port in "$((10#$GAME_PORT))" "$((10#$RCON_PORT))" "$((10#$STEAM_QUERY_PORT))"; do
 	if ! UFW_OUTPUT="$("${UFW_CMD[@]}" delete allow "$port/udp" 2>&1)"; then
 		printf '%s\nCould not remove the UFW allow rule for port %s.\n' "$UFW_OUTPUT" "$port" >&2
 		exit 1
@@ -318,8 +319,9 @@ if (( 10#$PORT_OPEN_DELAY > 0 )); then
 	printf 'Hive initialized. Adding UFW allow rules in %s s...\n' "$PORT_OPEN_DELAY"
 	sleep "$((10#$PORT_OPEN_DELAY))"
 fi
-for port in "$((10#$GAME_PORT))" "$((10#$STEAM_QUERY_PORT))"; do
+for port in "$((10#$GAME_PORT))" "$((10#$RCON_PORT))" "$((10#$STEAM_QUERY_PORT))"; do
 	"${UFW_CMD[@]}" allow "$port/udp" || { printf 'Could not add the UFW allow rule for port %s.\n' "$port" >&2; exit 1; }
 done
 set_server_state running
-printf 'UFW allow rules added for UDP ports %s and %s (external reachability not verified).\n' "$GAME_PORT" "$STEAM_QUERY_PORT"
+printf 'UFW allow rules added for UDP ports %s, %s and %s (external reachability not verified).\n' \
+	"$GAME_PORT" "$RCON_PORT" "$STEAM_QUERY_PORT"
