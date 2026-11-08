@@ -131,6 +131,9 @@ run_loop() {
 			last_checked="$now"
 			last_check_time="$now"
 			
+			# Re-read settings every minute to detect config changes
+			auto_recover="$(read_setting "$SCHEDULER_CONFIG" AUTO_RECOVER)"
+			
 			# Get current server state for display
 			local server_state="$(read_setting "$SERVER_CONFIG" STATE)"
 			local state_display="${server_state^^}"  # Convert to uppercase
