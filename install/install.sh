@@ -337,11 +337,14 @@ if [[ ! -x "$UFW_BIN" ]]; then
 fi
 TEMP_SUDOERS="$(mktemp "/etc/sudoers.d/.ugsm-${NEW_USER}-ufw.XXXXXX")"
 trap 'rm -f -- "$TEMP_SUDOERS"' EXIT
-SUDOERS_RULE="$NEW_USER ALL=(root) NOPASSWD:"
+SUDOERS_RULE="$NEW_USER ALL=(root) NOPASSWD: $UFW_BIN status verbose,"
+LEGACY_SUDOERS_RULE="$NEW_USER ALL=(root) NOPASSWD:"
 for port in "$GAME_PORT" "$RCON_PORT" "$STEAM_QUERY_PORT"; do
 	SUDOERS_RULE+=" $UFW_BIN allow $port/udp, $UFW_BIN delete allow $port/udp,"
+	LEGACY_SUDOERS_RULE+=" $UFW_BIN allow $port/udp, $UFW_BIN delete allow $port/udp,"
 done
 SUDOERS_RULE="${SUDOERS_RULE%,}"
+LEGACY_SUDOERS_RULE="${LEGACY_SUDOERS_RULE%,}"
 printf '%s\n' "$SUDOERS_RULE" > "$TEMP_SUDOERS"
 chmod 0440 "$TEMP_SUDOERS"
 if ! visudo -cf "$TEMP_SUDOERS"; then
@@ -350,11 +353,19 @@ if ! visudo -cf "$TEMP_SUDOERS"; then
 fi
 SUDOERS_ALREADY_INSTALLED=0
 if [[ -e "$SUDOERS_FILE" || -L "$SUDOERS_FILE" ]]; then
-	if [[ ! -f "$SUDOERS_FILE" || -L "$SUDOERS_FILE" ]] || [[ "$(stat -c '%u:%a' "$SUDOERS_FILE")" != '0:440' ]] || ! cmp -s -- "$TEMP_SUDOERS" "$SUDOERS_FILE"; then
+	if [[ ! -f "$SUDOERS_FILE" || -L "$SUDOERS_FILE" ]] || [[ "$(stat -c '%u:%a' "$SUDOERS_FILE")" != '0:440' ]]; then
 		printf 'Existing sudoers file does not match the configured rules: %s\n' "$SUDOERS_FILE" >&2
 		exit 1
 	fi
-	printf 'Matching sudoers rules already exist; skipping.\n'
+	if cmp -s -- "$TEMP_SUDOERS" "$SUDOERS_FILE"; then
+		printf 'Matching sudoers rules already exist; skipping.\n'
+	elif printf '%s\n' "$LEGACY_SUDOERS_RULE" | cmp -s - "$SUDOERS_FILE"; then
+		install -o root -g root -m 0440 -- "$TEMP_SUDOERS" "$SUDOERS_FILE"
+		printf 'Updated existing sudoers rules to allow read-only firewall status checks.\n'
+	else
+		printf 'Existing sudoers file does not match the configured rules: %s\n' "$SUDOERS_FILE" >&2
+		exit 1
+	fi
 	rm -- "$TEMP_SUDOERS"
 	trap - EXIT
 	SUDOERS_ALREADY_INSTALLED=1

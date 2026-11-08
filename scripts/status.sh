@@ -63,6 +63,93 @@ check_udp_socket() {
 	fi
 }
 
+# Read UFW's status once so each configured port can be checked against the
+# same firewall snapshot.
+load_ufw_status() {
+	local output
+	UFW_BIN="/usr/sbin/ufw"
+	UFW_STATUS=""
+	UFW_STATE="unknown"
+	UFW_STATUS_ERROR=""
+
+	if [[ ! -x "$UFW_BIN" ]]; then
+		UFW_STATUS_ERROR="ufw not found at $UFW_BIN"
+		return
+	fi
+
+	if (( EUID == 0 )); then
+		if ! output="$("$UFW_BIN" status verbose 2>&1)"; then
+			UFW_STATUS_ERROR="$output"
+			return
+		fi
+	elif command -v sudo &>/dev/null; then
+		if ! output="$(sudo -n "$UFW_BIN" status verbose 2>&1)"; then
+			UFW_STATUS_ERROR="$output"
+			return
+		fi
+	else
+		UFW_STATUS_ERROR="root privileges or sudo are required"
+		return
+	fi
+
+	UFW_STATUS="$output"
+	if grep -Fqx "Status: active" <<< "$UFW_STATUS"; then
+		UFW_STATE="active"
+	elif grep -Fqx "Status: inactive" <<< "$UFW_STATUS"; then
+		UFW_STATE="inactive"
+	else
+		UFW_STATUS_ERROR="could not determine UFW status"
+	fi
+}
+
+# Report whether UFW has a rule for a configured UDP port.
+check_ufw_port() {
+	local port="$1" actions incoming_policy
+	case "$UFW_STATE" in
+		inactive)
+			echo "⚠ UFW INACTIVE"
+			return
+			;;
+		unknown)
+			printf '? UNKNOWN (%s)\n' "$UFW_STATUS_ERROR"
+			return
+			;;
+	esac
+
+	actions="$(awk -v rule="${port}/udp" '
+		$1 == rule {
+			action = $2
+			if (action == "(v6)") action = $3
+			if (action == "ALLOW" || action == "DENY" || action == "REJECT" || action == "LIMIT") {
+				print action
+			}
+		}' <<< "$UFW_STATUS" | sort -u)"
+
+	if grep -Fxq "ALLOW" <<< "$actions"; then
+		if grep -Fxq "DENY" <<< "$actions" || grep -Fxq "REJECT" <<< "$actions"; then
+			echo "⚠ MIXED ALLOW/DENY RULES"
+		else
+			echo "✓ ALLOW RULE"
+		fi
+	elif grep -Fxq "DENY" <<< "$actions" || grep -Fxq "REJECT" <<< "$actions"; then
+		echo "✗ BLOCKED (DENY RULE)"
+	elif grep -Fxq "LIMIT" <<< "$actions"; then
+		echo "⚠ LIMITED"
+	else
+		incoming_policy="$(awk '
+			/^Default:/ {
+				line = tolower($0)
+				if (index(line, "deny (incoming)")) print "deny"
+				else if (index(line, "allow (incoming)")) print "allow"
+			}' <<< "$UFW_STATUS")"
+		case "$incoming_policy" in
+			deny) echo "✗ BLOCKED (DEFAULT DENY)" ;;
+			allow) echo "⚠ NO EXPLICIT RULE (DEFAULT ALLOW)" ;;
+			*) echo "⚠ NO EXPLICIT RULE" ;;
+		esac
+	fi
+}
+
 # Check whether the BattlEye RCON endpoint responds to an authenticated command.
 check_rcon_response() {
 	local server_ip="$1"
@@ -152,6 +239,7 @@ RCON_PORT="$(read_setting "$SERVER_CONFIG" RCON_PORT)"
 STEAM_QUERY_PORT="$(read_setting "$SERVER_CONFIG" STEAM_QUERY_PORT)"
 RCON_PASS="$(read_setting "$SERVER_CONFIG" RCON_PASS)"
 NEW_USER="$(read_setting "$SERVER_CONFIG" NEW_USER)"
+load_ufw_status
 
 # ============================================================================
 # 1. SERVER STATE
@@ -188,15 +276,18 @@ printf "\n┌─ Port Configuration & Status ───────────�
 
 printf "│ Game Port (UDP %s)\n" "$GAME_PORT"
 printf "│   Local socket: " && check_udp_socket "$GAME_PORT"
+printf "│   UFW firewall: " && check_ufw_port "$GAME_PORT"
 printf "│\n"
 
 printf "│ RCON Port (UDP %s)\n" "$RCON_PORT"
 printf "│   Local socket: " && check_udp_socket "$RCON_PORT"
+printf "│   UFW firewall: " && check_ufw_port "$RCON_PORT"
 printf "│   RCON check: " && check_rcon_response "$SERVER_IP" "$RCON_PORT" "$RCON_PASS"
 printf "│\n"
 
 printf "│ Steam Query Port (UDP %s)\n" "$STEAM_QUERY_PORT"
 printf "│   Local socket: " && check_udp_socket "$STEAM_QUERY_PORT"
+printf "│   UFW firewall: " && check_ufw_port "$STEAM_QUERY_PORT"
 printf "│\n"
 
 printf "└────────────────────────────────────────────────────────────────────┘\n"
