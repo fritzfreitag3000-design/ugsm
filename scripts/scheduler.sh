@@ -107,6 +107,10 @@ restart_due() {
 
 run_loop() {
 	local last_checked="" now reason auto_recover last_check_result last_check_time
+	
+	# Block all input to prevent accidental interruption or interaction
+	exec 0</dev/null
+	
 	auto_recover="$(read_setting "$SCHEDULER_CONFIG" AUTO_RECOVER)"
 	
 	printf '╔════════════════════════════════════════════════════════╗\n'
@@ -115,6 +119,7 @@ run_loop() {
 	printf '║ Config: %s\n' "$SCHEDULER_CONFIG"
 	printf '║ Auto-Recover: %s\n' "$([[ "$auto_recover" == "1" ]] && echo "ENABLED" || echo "DISABLED")"
 	printf '║ Restart Times: %s\n' "$(read_restart_times)"
+	printf '║ Input: DISABLED (read-only mode)\n'
 	printf '╚════════════════════════════════════════════════════════╝\n'
 	
 	last_check_result="Starting up..."
@@ -185,9 +190,12 @@ case "${1:-}" in
 			printf 'Scheduler is already running in tmux session "%s".\n' "$SESSION_NAME" >&2
 			exit 1
 		fi
-		tmux new-session -d -s "$SESSION_NAME" -c "$SCRIPT_DIRECTORY" "$(printf 'exec %q run' "$SCRIPT_DIRECTORY/scheduler.sh")"
+		tmux new-session -d -s "$SESSION_NAME" -c "$SCRIPT_DIRECTORY" < /dev/null "$(printf 'exec %q run' "$SCRIPT_DIRECTORY/scheduler.sh")"
+		tmux set-option -t "$SESSION_NAME" -w remain-on-exit on 2>/dev/null || true
 		set_scheduler_state 1
-		printf 'Scheduler started in tmux session "%s". Attach with: tmux attach -t %s\n' "$SESSION_NAME" "$SESSION_NAME"
+		printf 'Scheduler started in tmux session "%s".\n' "$SESSION_NAME"
+		printf 'To view logs: tmux attach -t %s\n' "$SESSION_NAME"
+		printf 'Note: Input is disabled. Detach with Ctrl+b, d\n'
 		;;
 	stop)
 		if session_active; then
