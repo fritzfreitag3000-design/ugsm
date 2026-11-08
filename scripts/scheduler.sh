@@ -131,17 +131,21 @@ run_loop() {
 			last_checked="$now"
 			last_check_time="$now"
 			
+			# Get current server state for display
+			local server_state="$(read_setting "$SERVER_CONFIG" STATE)"
+			local state_display="${server_state^^}"  # Convert to uppercase
+			
 			if restart_due "$now"; then
 				last_check_result="✓ Scheduled restart at $now"
-				printf '[%s] %-50s │ %s\n' "$now" "SCHEDULED RESTART" "Auto-Recover: $([[ "$auto_recover" == "1" ]] && echo "ON" || echo "OFF")"
+				printf '[%s] %-40s │ State: %-10s │ %s\n' "$now" "SCHEDULED RESTART" "$state_display" "Auto-Recover: $([[ "$auto_recover" == "1" ]] && echo "ON" || echo "OFF")"
 				restart_server
 			elif [[ "$auto_recover" == "1" ]] && reason="$(server_unhealthy)"; then
 				last_check_result="⚠ Auto-Recovery: $reason"
-				printf '[%s] %-50s │ %s\n' "$now" "AUTO-RECOVERY RESTART: $reason" "Auto-Recover: ON"
+				printf '[%s] %-40s │ State: %-10s │ %s\n' "$now" "AUTO-RECOVERY RESTART: $reason" "$state_display" "Auto-Recover: ON"
 				restart_server
 			else
 				last_check_result="✓ Server healthy"
-				printf '[%s] %-50s │ %s\n' "$now" "OK - Server running normally" "Auto-Recover: $([[ "$auto_recover" == "1" ]] && echo "ON" || echo "OFF")"
+				printf '[%s] %-40s │ State: %-10s │ %s\n' "$now" "OK - Server running normally" "$state_display" "Auto-Recover: $([[ "$auto_recover" == "1" ]] && echo "ON" || echo "OFF")"
 			fi
 		fi
 		# Sleep until the start of the next minute.
