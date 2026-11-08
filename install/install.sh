@@ -418,6 +418,44 @@ if [[ "$SUDOERS_ALREADY_INSTALLED" -eq 0 ]]; then
 	printf 'Granted %s permission to open and close only the configured UDP ports with sudo ufw.\n' "$NEW_USER"
 fi
 
+# Configure UFW firewall with default rules and ask to enable it.
+printf '\n=== Configuring UFW Firewall ===\n'
+
+# Check if UFW is already enabled or configured.
+UFW_STATUS="$(ufw status 2>/dev/null || echo 'inactive')"
+
+# Set default firewall policies for incoming and outgoing traffic.
+if [[ "$UFW_STATUS" == "inactive" ]]; then
+	printf 'Configuring UFW default policies:\n'
+	printf '  - Default incoming: DENY (block all incoming connections)\n'
+	printf '  - Default outgoing: ALLOW (allow all outgoing connections)\n'
+	ufw default deny incoming || {
+		printf 'Warning: Could not set default deny incoming policy.\n' >&2
+	}
+	ufw default allow outgoing || {
+		printf 'Warning: Could not set default allow outgoing policy.\n' >&2
+	}
+	printf 'UFW default policies configured.\n'
+else
+	printf 'UFW is already active; skipping default policy configuration.\n'
+fi
+
+# Ask if the user wants to enable UFW now.
+read -r -p 'Do you want to enable UFW firewall now? [y/N] ' UFW_ENABLE_ANSWER
+case "$UFW_ENABLE_ANSWER" in
+	[yY]|[yY][eE][sS])
+		printf 'Enabling UFW firewall...\n'
+		if ufw enable --force >/dev/null 2>&1; then
+			printf 'UFW firewall has been enabled successfully.\n'
+		else
+			printf 'Warning: UFW enable command returned an error. Check UFW status manually with: sudo ufw status\n' >&2
+		fi
+		;;
+	*)
+		printf 'UFW firewall has NOT been enabled. You can enable it later with: sudo ufw enable\n'
+		;;
+esac
+
 # Copy the project folder into the server folder and assign it to the new user.
 UGSM_COPY="$SERVER_DIRECTORY/ugsm"
 SERVER_CONFIG_NAME="$(basename -- "$INSTALL_CONFIG")"
