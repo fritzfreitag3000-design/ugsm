@@ -5,7 +5,8 @@ set -euo pipefail
 # IP and ports come from install/<server name>_server.conf, mods from config/mods.conf
 # and config/servermod.conf, all other parameters from config/start.conf.
 # After the start the console and RPT log are watched until the Hive is initialized,
-# then the ports are opened again in ufw (limited by STARTUP_TIMEOUT in the server conf).
+# then UFW allow rules are added (limited by STARTUP_TIMEOUT in the server conf).
+# These rules only filter traffic when UFW is active and its other rules and policy permit it.
 # Usage: start.sh [--print]
 #   --print  only show the command; otherwise show it and start the server
 
@@ -257,10 +258,21 @@ fi
 UFW_CMD=("$UFW_BIN")
 (( EUID == 0 )) || UFW_CMD=(sudo -n "$UFW_BIN")
 
-# Block the ports by removing their allow rules (incoming traffic is denied by default).
+if ! UFW_STATUS="$("${UFW_CMD[@]}" status verbose 2>&1)"; then
+	printf 'Warning: Could not check UFW status; startup port blocking cannot be verified: %s\n' "$UFW_STATUS" >&2
+elif grep -Fqx 'Status: inactive' <<< "$UFW_STATUS"; then
+	printf 'Warning: UFW is inactive. UDP ports %s and %s will NOT be blocked during startup.\n' \
+		"$GAME_PORT" "$STEAM_QUERY_PORT" >&2
+elif grep -Fqx 'Status: active' <<< "$UFW_STATUS"; then
+	printf 'Warning: Removing allow rules does not guarantee startup port blocking; check the UFW policy and other rules.\n' >&2
+else
+	printf 'Warning: Unrecognized UFW status; startup port blocking cannot be verified.\n' >&2
+fi
+
+# Removing allow rules only blocks traffic when other UFW rules and policy also deny it.
 for port in "$((10#$GAME_PORT))" "$((10#$STEAM_QUERY_PORT))"; do
 	if ! UFW_OUTPUT="$("${UFW_CMD[@]}" delete allow "$port/udp" 2>&1)"; then
-		printf '%s\nCould not block port %s with ufw.\n' "$UFW_OUTPUT" "$port" >&2
+		printf '%s\nCould not remove the UFW allow rule for port %s.\n' "$UFW_OUTPUT" "$port" >&2
 		exit 1
 	fi
 done
@@ -281,7 +293,7 @@ HIVE_READY=0
 while (( $(date +%s) - START_TIME < STARTUP_TIMEOUT )); do
 	if ! "${TMUX_CMD[@]}" has-session -t "=$SERVER_NAME" 2>/dev/null; then
 		set_server_state error
-		printf 'The server stopped before the Hive was initialized. Ports stay blocked.\n' >&2
+		printf 'The server stopped before the Hive was initialized. UFW allow rules were not added.\n' >&2
 		exit 1
 	fi
 	if "${TMUX_CMD[@]}" capture-pane -p -t "=$SERVER_NAME:" 2>/dev/null | grep -Eiq -- "$HIVE_PATTERN"; then
@@ -298,16 +310,16 @@ done
 
 if (( ! HIVE_READY )); then
 	set_server_state error
-	printf 'Hive was not initialized within %s s. Ports stay blocked.\n' "$STARTUP_TIMEOUT" >&2
+	printf 'Hive was not initialized within %s s. UFW allow rules were not added.\n' "$STARTUP_TIMEOUT" >&2
 	exit 1
 fi
 
 if (( 10#$PORT_OPEN_DELAY > 0 )); then
-	printf 'Hive initialized. Opening the ports in %s s...\n' "$PORT_OPEN_DELAY"
+	printf 'Hive initialized. Adding UFW allow rules in %s s...\n' "$PORT_OPEN_DELAY"
 	sleep "$((10#$PORT_OPEN_DELAY))"
 fi
 for port in "$((10#$GAME_PORT))" "$((10#$STEAM_QUERY_PORT))"; do
-	"${UFW_CMD[@]}" allow "$port/udp" || { printf 'Could not open port %s with ufw.\n' "$port" >&2; exit 1; }
+	"${UFW_CMD[@]}" allow "$port/udp" || { printf 'Could not add the UFW allow rule for port %s.\n' "$port" >&2; exit 1; }
 done
 set_server_state running
-printf 'Ports %s and %s are open.\n' "$GAME_PORT" "$STEAM_QUERY_PORT"
+printf 'UFW allow rules added for UDP ports %s and %s (external reachability not verified).\n' "$GAME_PORT" "$STEAM_QUERY_PORT"

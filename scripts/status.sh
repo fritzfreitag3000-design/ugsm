@@ -102,12 +102,16 @@ load_ufw_status() {
 	fi
 }
 
-# Report whether UFW has a rule for a configured UDP port.
+# Report the UFW policy, not external reachability.
 check_ufw_port() {
-	local port="$1" actions incoming_policy
+	local port="$1"
+	if [[ ! "$port" =~ ^[0-9]{1,5}$ ]] || (( 10#$port < 1 || 10#$port > 65535 )); then
+		echo "? UNKNOWN (invalid port)"
+		return
+	fi
 	case "$UFW_STATE" in
 		inactive)
-			echo "⚠ UFW INACTIVE"
+			echo "⚠ OPEN (UFW inactive)"
 			return
 			;;
 		unknown)
@@ -116,38 +120,44 @@ check_ufw_port() {
 			;;
 	esac
 
-	actions="$(awk -v rule="${port}/udp" '
-		$1 == rule {
-			action = $2
-			if (action == "(v6)") action = $3
-			if (action == "ALLOW" || action == "DENY" || action == "REJECT" || action == "LIMIT") {
-				print action
+	awk -v port="$((10#$port))" '
+		/^Default:/ {
+			line = tolower($0)
+			if (index(line, "deny (incoming)") || index(line, "reject (incoming)")) default_action = "BLOCKED"
+			else if (index(line, "allow (incoming)")) default_action = "OPEN"
+		}
+		/^--+[[:space:]]+--+/ { rules = 1; next }
+		rules && NF {
+			action_index = 0
+			for (i = 2; i <= NF; i++) {
+				if ($i == "ALLOW" || $i == "DENY" || $i == "REJECT" || $i == "LIMIT") {
+					action_index = i
+					break
+				}
 			}
-		}' <<< "$UFW_STATUS" | sort -u)"
-
-	if grep -Fxq "ALLOW" <<< "$actions"; then
-		if grep -Fxq "DENY" <<< "$actions" || grep -Fxq "REJECT" <<< "$actions"; then
-			echo "⚠ MIXED ALLOW/DENY RULES"
-		else
-			echo "✓ ALLOW RULE"
-		fi
-	elif grep -Fxq "DENY" <<< "$actions" || grep -Fxq "REJECT" <<< "$actions"; then
-		echo "✗ BLOCKED (DENY RULE)"
-	elif grep -Fxq "LIMIT" <<< "$actions"; then
-		echo "⚠ LIMITED"
-	else
-		incoming_policy="$(awk '
-			/^Default:/ {
-				line = tolower($0)
-				if (index(line, "deny (incoming)")) print "deny"
-				else if (index(line, "allow (incoming)")) print "allow"
-			}' <<< "$UFW_STATUS")"
-		case "$incoming_policy" in
-			deny) echo "✗ BLOCKED (DEFAULT DENY)" ;;
-			allow) echo "⚠ NO EXPLICIT RULE (DEFAULT ALLOW)" ;;
-			*) echo "⚠ NO EXPLICIT RULE" ;;
-		esac
-	fi
+			if (!action_index) { uncertain = 1; next }
+			action = $action_index
+			if ($(action_index + 1) == "OUT" || $(action_index + 1) == "FWD") next
+			if ($(action_index + 1) != "IN") { uncertain = 1; next }
+			if ($1 ~ /^[0-9]+\/tcp$/) next
+			if ($1 ~ /^[0-9]+\/udp$/ && ($1 + 0) != port) next
+			if ($1 != port "/udp") { uncertain = 1; next }
+			family = ($2 == "(v6)") ? 6 : 4
+			if (action_index != (family == 6 ? 3 : 2)) { uncertain = 1; next }
+			if ($(action_index + 2) != "Anywhere") { uncertain = 1; next }
+			if (action == "LIMIT") { uncertain = 1; next }
+			result = (action == "ALLOW") ? "OPEN" : "BLOCKED"
+			if (seen[family] && seen[family] != result) uncertain = 1
+			seen[family] = result
+		}
+		END {
+			if (!default_action) uncertain = 1
+			v4 = seen[4] ? seen[4] : default_action
+			v6 = seen[6] ? seen[6] : default_action
+			if (uncertain || v4 != v6) print "? UNKNOWN (complex or differing UFW rules)"
+			else if (v4 == "OPEN") print "✓ OPEN"
+			else print "✗ BLOCKED"
+		}' <<< "$UFW_STATUS"
 }
 
 # Check whether the BattlEye RCON endpoint responds to an authenticated command.
