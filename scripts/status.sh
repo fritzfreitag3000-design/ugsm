@@ -186,7 +186,7 @@ check_rcon_response() {
 # Check if tmux session exists and is active.
 check_tmux_session() {
 	local session_name="$1"
-	if tmux has-session -t "$session_name" 2>/dev/null; then
+	if tmux list-sessions -F "#{session_name}" 2>/dev/null | grep -qx "$session_name"; then
 		if tmux list-sessions -F "#{session_name}:#{?session_attached,attached,detached}" 2>/dev/null | grep -q "^${session_name}:"; then
 			echo "✓ ACTIVE (attached)"
 		else
