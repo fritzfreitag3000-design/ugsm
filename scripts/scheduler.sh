@@ -56,12 +56,15 @@ restart_server() {
 	fi
 }
 
-# Prints the first failed check and returns 1 if the server is not healthy.
-# Checks are skipped unless the server state is "running".
+# Prints the first failed check and returns 0 if the server is unhealthy.
+# Returns 0 (unhealthy) if STATE != "running" or if any health check fails.
 server_unhealthy() {
 	local state user game_port steam_port rcon_port port listening
 	state="$(read_setting "$SERVER_CONFIG" STATE)"
-	[[ "$state" == "running" ]] || return 1
+	if [[ "$state" != "running" ]]; then
+		printf 'Server is not running (STATE=%s).\n' "$state"
+		return 0
+	fi
 
 	user="$(read_setting "$SERVER_CONFIG" NEW_USER)"
 	game_port="$(read_setting "$SERVER_CONFIG" GAME_PORT)"
