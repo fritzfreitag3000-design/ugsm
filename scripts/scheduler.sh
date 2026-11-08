@@ -106,17 +106,37 @@ restart_due() {
 }
 
 run_loop() {
-	local last_checked="" now reason
+	local last_checked="" now reason auto_recover last_check_result last_check_time
+	auto_recover="$(read_setting "$SCHEDULER_CONFIG" AUTO_RECOVER)"
+	
+	printf '╔════════════════════════════════════════════════════════╗\n'
+	printf '║ DayZ Server Scheduler Started                          ║\n'
+	printf '║ Server: %s\n' "$SERVER_NAME"
+	printf '║ Config: %s\n' "$SCHEDULER_CONFIG"
+	printf '║ Auto-Recover: %s\n' "$([[ "$auto_recover" == "1" ]] && echo "ENABLED" || echo "DISABLED")"
+	printf '║ Restart Times: %s\n' "$(read_restart_times)"
+	printf '╚════════════════════════════════════════════════════════╝\n'
+	
+	last_check_result="Starting up..."
+	last_check_time="--:--"
+	
 	while true; do
 		now="$(date +%H:%M)"
 		if [[ "$now" != "$last_checked" ]]; then
 			last_checked="$now"
+			last_check_time="$now"
+			
 			if restart_due "$now"; then
-				printf '[%s] Restart time reached.\n' "$now"
+				last_check_result="✓ Scheduled restart at $now"
+				printf '[%s] %-50s │ %s\n' "$now" "SCHEDULED RESTART" "Auto-Recover: $([[ "$auto_recover" == "1" ]] && echo "ON" || echo "OFF")"
 				restart_server
-			elif [[ "$(read_setting "$SCHEDULER_CONFIG" AUTO_RECOVER)" == "1" ]] && reason="$(server_unhealthy)"; then
-				printf '[%s] Auto recover: %s Restarting.\n' "$now" "$reason"
+			elif [[ "$auto_recover" == "1" ]] && reason="$(server_unhealthy)"; then
+				last_check_result="⚠ Auto-Recovery: $reason"
+				printf '[%s] %-50s │ %s\n' "$now" "AUTO-RECOVERY RESTART: $reason" "Auto-Recover: ON"
 				restart_server
+			else
+				last_check_result="✓ Server healthy"
+				printf '[%s] %-50s │ %s\n' "$now" "OK - Server running normally" "Auto-Recover: $([[ "$auto_recover" == "1" ]] && echo "ON" || echo "OFF")"
 			fi
 		fi
 		# Sleep until the start of the next minute.
@@ -180,9 +200,31 @@ case "${1:-}" in
 		;;
 	status)
 		if session_active; then
-			printf 'Scheduler is running in tmux session "%s".\n' "$SESSION_NAME"
+			local auto_recover restart_times scheduler_state
+			auto_recover="$(read_setting "$SCHEDULER_CONFIG" AUTO_RECOVER)"
+			restart_times="$(read_restart_times)"
+			scheduler_state="$(read_setting "$SERVER_CONFIG" SCHEDULER_STATE)"
+			
+			printf '\n┌─ Scheduler Status ────────────────────────────────────┐\n'
+			printf '│ Status: ✓ RUNNING\n'
+			printf '│ Session Name: %s\n' "$SESSION_NAME"
+			printf '│ Server: %s\n' "$SERVER_NAME"
+			printf '│\n'
+			printf '│ Configuration:\n'
+			printf '│   Auto-Recover: %s\n' "$([[ "$auto_recover" == "1" ]] && echo "ENABLED" || echo "DISABLED")"
+			printf '│   Restart Times: %s\n' "$restart_times"
+			printf '│   Scheduler State: %s\n' "$scheduler_state"
+			printf '│\n'
+			printf '│ To view logs: tmux attach -t %s\n' "$SESSION_NAME"
+			printf '│ To stop: %s stop\n' "$0"
+			printf '└────────────────────────────────────────────────────────┘\n\n'
 		else
-			printf 'Scheduler is not running.\n'
+			printf '\n┌─ Scheduler Status ────────────────────────────────────┐\n'
+			printf '│ Status: ✗ NOT RUNNING\n'
+			printf '│ Session Name: %s\n' "$SESSION_NAME"
+			printf '│\n'
+			printf '│ To start: %s start\n' "$0"
+			printf '└────────────────────────────────────────────────────────┘\n\n'
 		fi
 		;;
 	run)
