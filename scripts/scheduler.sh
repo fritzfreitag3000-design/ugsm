@@ -56,10 +56,26 @@ restart_server() {
 	fi
 }
 
+# Check if a UDP port is actively bound on the system.
+check_udp_port_bound() {
+	local port="$1"
+	
+	if [[ ! "$port" =~ ^[0-9]{1,5}$ ]] || (( 10#$port < 1 || 10#$port > 65535 )); then
+		return 1
+	fi
+	
+	if command -v ss &>/dev/null; then
+		ss -H -u -l -n "sport = :$((10#$port))" 2>/dev/null | grep -q . && return 0
+	elif command -v netstat &>/dev/null; then
+		netstat -uln 2>/dev/null | awk -v port="$((10#$port))" '$4 ~ (":" port "$") { found = 1 } END { exit !found }' && return 0
+	fi
+	return 1
+}
+
 # Prints the first failed check and returns 0 if the server is unhealthy.
 # Returns 0 (unhealthy) if STATE != "running" or if any health check fails.
 server_unhealthy() {
-	local state user game_port steam_port rcon_port port listening
+	local state user game_port steam_port rcon_port port
 	state="$(read_setting "$SERVER_CONFIG" STATE)"
 	if [[ "$state" != "running" ]]; then
 		printf 'Server is not running (STATE=%s).\n' "$state"
@@ -83,9 +99,8 @@ server_unhealthy() {
 		return 0
 	fi
 
-	listening="$(ss -H -lnu 2>/dev/null | awk '{n = split($5, a, ":"); print a[n]}')"
 	for port in "$game_port" "$steam_port" "$rcon_port"; do
-		if ! grep -qx -- "$((10#$port))" <<< "$listening"; then
+		if ! check_udp_port_bound "$port"; then
 			printf 'Port %s is not active.\n' "$((10#$port))"
 			return 0
 		fi
