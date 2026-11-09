@@ -229,7 +229,7 @@ log_sink() {
 }
 
 recover_if_due() {
-	local ts="$1" uptime_seconds="$2"
+	local ts="$1" uptime_seconds="$2" server_state="$3" action="restarting"
 	if (( recovery_attempted && uptime_seconds - last_recovery < 600 )); then
 		return 0
 	fi
@@ -244,8 +244,17 @@ recover_if_due() {
 	fi
 	last_recovery="$uptime_seconds"
 	recovery_attempted=1
-	printf '[%s] ⚠ Auto-recovery: restarting the server (attempt %s of 3)\n' "$ts" "$((recovery_failures + 1))"
-	if restart_server; then
+	if [[ "$server_state" == "stop" ]]; then
+		action="starting"
+	fi
+	printf '[%s] ⚠ Auto-recovery: %s the server (attempt %s of 3)\n' "$ts" "$action" "$((recovery_failures + 1))"
+	if [[ "$server_state" == "stop" ]]; then
+		if "$SCRIPT_DIRECTORY/start.sh"; then
+			recovery_pending=1
+		else
+			((recovery_failures+=1))
+		fi
+	elif restart_server; then
 		recovery_pending=1
 	else
 		((recovery_failures+=1))
@@ -279,8 +288,10 @@ run_loop() {
 			auto_recover="$(read_setting "$SCHEDULER_CONFIG" AUTO_RECOVER)"
 			server_state="$(read_setting "$SERVER_CONFIG" STATE)" || server_state="unknown"
 
-			printf '[%s] Scheduler: ✓ running as planned | Server state: %s | Auto-Recover: %s\n' \
-				"$ts" "${server_state:-unknown}" "$([[ "$auto_recover" == "1" ]] && echo ON || echo OFF)"
+			if [[ "$server_state" != "stop" ]]; then
+				printf '[%s] Scheduler: ✓ running as planned | Server state: %s | Auto-Recover: %s\n' \
+					"$ts" "${server_state:-unknown}" "$([[ "$auto_recover" == "1" ]] && echo ON || echo OFF)"
+			fi
 
 			if time_due "$now" MAINTENANCE_TIMES; then
 				run_maintenance "$ts"
@@ -289,6 +300,12 @@ run_loop() {
 				restart_server || true
 			elif [[ "$server_state" == "starting" || "$server_state" == "stopping" ]]; then
 				printf '[%s] Server is %s; skipping health check and auto-recovery.\n' "$ts" "$server_state"
+			elif [[ "$server_state" == "stop" ]]; then
+				if [[ "$auto_recover" == "1" ]]; then
+					read -r uptime_seconds uptime_fraction < /proc/uptime
+					uptime_seconds="${uptime_seconds%%.*}"
+					recover_if_due "$ts" "$uptime_seconds" "$server_state" || return 1
+				fi
 			else
 				check_server_health
 				log_health "$ts"
@@ -298,7 +315,7 @@ run_loop() {
 				elif [[ "$auto_recover" == "1" ]]; then
 					read -r uptime_seconds uptime_fraction < /proc/uptime
 					uptime_seconds="${uptime_seconds%%.*}"
-					recover_if_due "$ts" "$uptime_seconds" || return 1
+					recover_if_due "$ts" "$uptime_seconds" "$server_state" || return 1
 				fi
 			fi
 		fi

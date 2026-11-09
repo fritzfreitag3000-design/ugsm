@@ -1,12 +1,16 @@
 # ugsm
 
-Start the tmux dashboard with `scripts/dashboard.sh`. It opens the interactive
+Start a registered server's tmux dashboard from any directory with
+`ugsm <server-name>` (for example, `ugsm my-server`). The server is registered
+by `install/install.sh`; after updating the UGSM copy on an existing server, run
+`sudo /path/to/server/ugsm/scripts/install_command.sh` once. Run `ugsm` as the
+Linux user that owns that server's tmux sessions. It opens the interactive
 UGSM menu in the upper-left pane, the server console output in the upper-right,
 and the scheduler output across the bottom. The server and scheduler output
 panes are read-only monitors; their existing tmux sessions are left untouched.
-Run the dashboard as the user that owns those tmux sessions. If an older or
-incomplete dashboard exists, exit any menu action and close that dashboard
-using the command reported by the script before starting it again.
+If an older or incomplete dashboard exists, exit any menu action and close
+that dashboard using the command reported by the script before starting it
+again.
 
 Mouse scrolling is enabled in the dashboard. Click the menu or scheduler pane
 first, then scroll to enter tmux scrollback. Press `q` to return to the live

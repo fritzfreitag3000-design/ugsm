@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Managed by UGSM: dispatch to a registered server dashboard.
+set -euo pipefail
+
+REGISTRY_DIRECTORY="/etc/ugsm/servers"
+
+if [[ "$#" -ne 1 || ! "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+	printf 'Usage: ugsm <server-name>\n' >&2
+	exit 2
+fi
+
+SERVER_NAME="$1"
+REGISTRY_FILE="$REGISTRY_DIRECTORY/$SERVER_NAME"
+if [[ ! -f "$REGISTRY_FILE" || -L "$REGISTRY_FILE" ]]; then
+	printf 'No UGSM server is registered as "%s".\n' "$SERVER_NAME" >&2
+	exit 1
+fi
+
+IFS= read -r PROJECT_DIRECTORY < "$REGISTRY_FILE" || {
+	printf 'Invalid UGSM registry entry: %s\n' "$REGISTRY_FILE" >&2
+	exit 1
+}
+if [[ "$PROJECT_DIRECTORY" != /* || -z "$PROJECT_DIRECTORY" ]]; then
+	printf 'Invalid UGSM project path in %s.\n' "$REGISTRY_FILE" >&2
+	exit 1
+fi
+
+DASHBOARD="$PROJECT_DIRECTORY/scripts/dashboard.sh"
+if [[ ! -x "$DASHBOARD" ]]; then
+	printf 'Dashboard script is missing or not executable: %s\n' "$DASHBOARD" >&2
+	exit 1
+fi
+
+exec "$DASHBOARD"

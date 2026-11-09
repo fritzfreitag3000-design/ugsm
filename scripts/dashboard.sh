@@ -2,12 +2,12 @@
 set -euo pipefail
 
 # Opens a tmux dashboard with the UGSM menu and read-only server/scheduler output.
-# Usage: dashboard.sh
+# Usage: dashboard.sh [server-name]
 
-SCRIPT_DIRECTORY="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIRECTORY="$(cd -- "$SCRIPT_DIRECTORY/.." && pwd)"
-SERVER_DIRECTORY="$(cd -- "$PROJECT_DIRECTORY/.." && pwd)"
-SERVER_NAME="$(basename -- "$SERVER_DIRECTORY")"
+SCRIPT_DIRECTORY="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+PROJECT_DIRECTORY="$(cd -- "$SCRIPT_DIRECTORY/.." && pwd -P)"
+SERVER_DIRECTORY="$(dirname -- "$PROJECT_DIRECTORY")"
+SERVER_NAME=""
 DASHBOARD_SESSION="${SERVER_NAME}_dashboard"
 
 monitor_pane() {
@@ -45,10 +45,85 @@ monitor_pane() {
 if [[ "${1:-}" == "--monitor" && "$#" -eq 2 ]]; then
 	monitor_pane "$2"
 fi
-if [[ "$#" -ne 0 ]]; then
-	printf 'Usage: %s\n' "$0" >&2
+if (( $# > 1 )) || { (( $# == 1 )) && [[ ! "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; }; then
+	printf 'Usage: %s [server-name]\n' "$0" >&2
 	exit 2
 fi
+
+read_setting() {
+	awk -v key="$2" '
+	{
+		separator = index($0, "=")
+		if (separator == 0) next
+		name = substr($0, 1, separator - 1)
+		gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
+		if (name != key) next
+		value = substr($0, separator + 1)
+		sub(/[[:space:]]+#.*$/, "", value)
+		gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+		if (value ~ /^".*"$/) {
+			sub(/^"/, "", value)
+			sub(/"$/, "", value)
+		}
+		print value
+		exit
+	}' "$1"
+}
+
+if (( $# == 1 )); then
+	SERVER_NAME="$1"
+	SERVER_CONFIG="$PROJECT_DIRECTORY/install/${SERVER_NAME}_server.conf"
+	if [[ ! -r "$SERVER_CONFIG" ]] || [[ "$(read_setting "$SERVER_CONFIG" SERVER_NAME)" != "$SERVER_NAME" ]]; then
+		printf 'Matching server config not found: %s\n' "$SERVER_CONFIG" >&2
+		exit 1
+	fi
+else
+	shopt -s nullglob
+	SERVER_CONFIGS=("$PROJECT_DIRECTORY"/install/*_server.conf)
+	shopt -u nullglob
+	for config in "${SERVER_CONFIGS[@]}"; do
+		config_name="$(read_setting "$config" SERVER_NAME)"
+		if [[ ! "$config_name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] \
+			|| [[ "$(basename -- "$config")" != "${config_name}_server.conf" ]]; then
+			continue
+		fi
+		if [[ "$(basename -- "$SERVER_DIRECTORY")" == "$config_name" ]]; then
+			SERVER_NAME="$config_name"
+			SERVER_CONFIG="$config"
+			break
+		fi
+		if [[ -n "$SERVER_NAME" ]]; then
+			printf 'Multiple server configs found. Specify one: %s <server-name>\n' "$0" >&2
+			exit 2
+		fi
+		SERVER_NAME="$config_name"
+		SERVER_CONFIG="$config"
+	done
+	if [[ -z "$SERVER_NAME" ]]; then
+		printf 'No matching install/<server-name>_server.conf found in %s/install.\n' "$PROJECT_DIRECTORY" >&2
+		exit 1
+	fi
+fi
+
+DASHBOARD_SESSION="${SERVER_NAME}_dashboard"
+
+if [[ "$(basename -- "$SERVER_DIRECTORY")" != "$SERVER_NAME" ]]; then
+	REGISTRY_FILE="/etc/ugsm/servers/$SERVER_NAME"
+	if [[ -f "$REGISTRY_FILE" && ! -L "$REGISTRY_FILE" ]]; then
+		IFS= read -r REGISTERED_PROJECT < "$REGISTRY_FILE" || {
+			printf 'Invalid UGSM registry entry: %s\n' "$REGISTRY_FILE" >&2
+			exit 1
+		}
+		if [[ "$REGISTERED_PROJECT" == /* && "$REGISTERED_PROJECT" != "$PROJECT_DIRECTORY" \
+			&& -x "$REGISTERED_PROJECT/scripts/dashboard.sh" ]]; then
+			exec "$REGISTERED_PROJECT/scripts/dashboard.sh" "$SERVER_NAME"
+		fi
+	fi
+	printf 'This is not the installed server directory for "%s". Run ugsm %s after registering the server.\n' \
+		"$SERVER_NAME" "$SERVER_NAME" >&2
+	exit 1
+fi
+
 if ! command -v tmux >/dev/null 2>&1; then
 	printf 'tmux is not installed.\n' >&2
 	exit 1
