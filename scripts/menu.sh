@@ -347,6 +347,7 @@ while true; do
 	fi
 	printf '\n  Server state: %s\n' "${SERVER_STATE:-unknown}"
 	while IFS= read -r line || [[ -n "$line" ]]; do
+		[[ "$line" == "Status: online" ]] && continue
 		printf '  %s\n' "$line"
 	done <<< "$STATUS_OUTPUT"
 	show_scheduler_status
