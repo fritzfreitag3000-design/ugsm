@@ -287,6 +287,8 @@ run_loop() {
 			elif time_due "$now" RESTART_TIMES; then
 				printf '[%s] Scheduled restart at %s\n' "$ts" "$now"
 				restart_server || true
+			elif [[ "$server_state" == "starting" || "$server_state" == "stopping" ]]; then
+				printf '[%s] Server is %s; skipping health check and auto-recovery.\n' "$ts" "$server_state"
 			else
 				check_server_health
 				log_health "$ts"
