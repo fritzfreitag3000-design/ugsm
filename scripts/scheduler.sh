@@ -79,31 +79,31 @@ run_maintenance() {
 	mapfile -t commands < <(read_setting_all "$SCHEDULER_CONFIG" MAINTENANCE_COMMAND)
 	start_after="$(read_setting "$SCHEDULER_CONFIG" MAINTENANCE_START_SERVER)"
 
-	printf '[%s] Wartung gestartet: Server wird gestoppt\n' "$ts"
+	printf '[%s] Maintenance started: stopping the server\n' "$ts"
 	if ! "$SCRIPT_DIRECTORY/stop.sh"; then
-		printf '[%s] ✗ stop.sh fehlgeschlagen, Wartung abgebrochen\n' "$(date +%H:%M:%S)"
+		printf '[%s] ✗ stop.sh failed, maintenance cancelled\n' "$(date +%H:%M:%S)"
 		return 0
 	fi
 
 	if (( ${#commands[@]} == 0 )); then
-		printf '[%s] Keine MAINTENANCE_COMMAND konfiguriert\n' "$(date +%H:%M:%S)"
+		printf '[%s] No MAINTENANCE_COMMAND configured\n' "$(date +%H:%M:%S)"
 	fi
 	for command in "${commands[@]}"; do
 		printf '[%s] ▶ %s\n' "$(date +%H:%M:%S)" "$command"
 		rc=0
 		bash -c "$command" </dev/null || rc=$?
 		if (( rc == 0 )); then
-			printf '[%s] ✓ fertig (Exit 0): %s\n' "$(date +%H:%M:%S)" "$command"
+			printf '[%s] ✓ done (exit 0): %s\n' "$(date +%H:%M:%S)" "$command"
 		else
-			printf '[%s] ✗ Fehler (Exit %s): %s\n' "$(date +%H:%M:%S)" "$rc" "$command"
+			printf '[%s] ✗ failed (exit %s): %s\n' "$(date +%H:%M:%S)" "$rc" "$command"
 		fi
 	done
 
 	if [[ "$start_after" == "0" ]]; then
-		printf '[%s] Wartung beendet, Server bleibt gestoppt (MAINTENANCE_START_SERVER=0)\n' "$(date +%H:%M:%S)"
+		printf '[%s] Maintenance finished, server stays stopped (MAINTENANCE_START_SERVER=0)\n' "$(date +%H:%M:%S)"
 	else
-		printf '[%s] Wartung beendet, Server wird gestartet\n' "$(date +%H:%M:%S)"
-		"$SCRIPT_DIRECTORY/start.sh" || printf '[%s] ✗ start.sh fehlgeschlagen\n' "$(date +%H:%M:%S)"
+		printf '[%s] Maintenance finished, starting the server\n' "$(date +%H:%M:%S)"
+		"$SCRIPT_DIRECTORY/start.sh" || printf '[%s] ✗ start.sh failed\n' "$(date +%H:%M:%S)"
 	fi
 }
 
@@ -178,7 +178,7 @@ check_server_health() {
 		check_udp_port_bound "$port" || rc=$?
 		case "$rc" in
 			0) HEALTH_DETAILS+=" | ${label%:*}: ✓ ok" ;;
-			2) HEALTH_DETAILS+=" | ${label%:*}: ? unknown (ss/netstat fehlt)" ;;
+			2) HEALTH_DETAILS+=" | ${label%:*}: ? unknown (ss/netstat missing)" ;;
 			*) HEALTH_DETAILS+=" | ${label%:*}: ✗ not bound"; HEALTH_OK=0 ;;
 		esac
 	done
@@ -189,12 +189,12 @@ check_server_health() {
 log_health() {
 	local ts="$1"
 	if (( HEALTH_OK )); then
-		printf '[%s] Letzter Check: ✓ HEALTHY | %s\n' "$ts" "$HEALTH_DETAILS"
+		printf '[%s] Last check: ✓ HEALTHY | %s\n' "$ts" "$HEALTH_DETAILS"
 	else
-		printf '[%s] Letzter Check: ✗ UNHEALTHY | %s\n' "$ts" "$HEALTH_DETAILS"
-		printf '[%s] --- status.sh Ausgabe ---\n' "$ts"
+		printf '[%s] Last check: ✗ UNHEALTHY | %s\n' "$ts" "$HEALTH_DETAILS"
+		printf '[%s] --- status.sh output ---\n' "$ts"
 		"$SCRIPT_DIRECTORY/status.sh" 2>&1 || true
-		printf '[%s] --- Ende status.sh ---\n' "$ts"
+		printf '[%s] --- end of status.sh ---\n' "$ts"
 	fi
 }
 
@@ -237,7 +237,7 @@ run_loop() {
 
 	auto_recover="$(read_setting "$SCHEDULER_CONFIG" AUTO_RECOVER)"
 
-	printf '[%s] Scheduler gestartet | Server: %s | Auto-Recover: %s | Restart-Zeiten: %s | Wartung: %s\n' \
+	printf '[%s] Scheduler started | Server: %s | Auto-Recover: %s | Restart times: %s | Maintenance times: %s\n' \
 		"$(date +%H:%M:%S)" "$SERVER_NAME" "$([[ "$auto_recover" == "1" ]] && echo ON || echo OFF)" "$(read_restart_times)" "$(read_setting "$SCHEDULER_CONFIG" MAINTENANCE_TIMES)"
 
 	while true; do
@@ -248,19 +248,19 @@ run_loop() {
 			auto_recover="$(read_setting "$SCHEDULER_CONFIG" AUTO_RECOVER)"
 			server_state="$(read_setting "$SERVER_CONFIG" STATE)" || server_state="unknown"
 
-			printf '[%s] Scheduler: ✓ läuft wie geplant | Server-Status: %s | Auto-Recover: %s\n' \
+			printf '[%s] Scheduler: ✓ running as planned | Server state: %s | Auto-Recover: %s\n' \
 				"$ts" "${server_state:-unknown}" "$([[ "$auto_recover" == "1" ]] && echo ON || echo OFF)"
 
 			if time_due "$now" MAINTENANCE_TIMES; then
 				run_maintenance "$ts"
 			elif time_due "$now" RESTART_TIMES; then
-				printf '[%s] Geplanter Neustart um %s\n' "$ts" "$now"
+				printf '[%s] Scheduled restart at %s\n' "$ts" "$now"
 				restart_server || true
 			else
 				check_server_health
 				log_health "$ts"
 				if [[ "$auto_recover" == "1" ]] && (( ! HEALTH_OK )); then
-					printf '[%s] ⚠ Auto-Recovery: Neustart wird ausgeführt\n' "$ts"
+					printf '[%s] ⚠ Auto-recovery: restarting the server\n' "$ts"
 					restart_server || true
 				fi
 			fi
@@ -338,9 +338,9 @@ case "${1:-}" in
 		;;
 	status)
 		if session_active; then
-			printf 'Scheduler: ✓ AKTIV (tmux session "%s")\n' "$SESSION_NAME"
+			printf 'Scheduler: ✓ ACTIVE (tmux session "%s")\n' "$SESSION_NAME"
 		else
-			printf 'Scheduler: ✗ NICHT AKTIV\n'
+			printf 'Scheduler: ✗ NOT ACTIVE\n'
 		fi
 		;;
 	run)
