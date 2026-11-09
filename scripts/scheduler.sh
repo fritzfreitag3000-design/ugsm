@@ -109,9 +109,10 @@ run_maintenance() {
 
 restart_server() {
 	if "$SCRIPT_DIRECTORY/stop.sh"; then
-		"$SCRIPT_DIRECTORY/start.sh" || printf 'start.sh failed.\n' >&2
+		"$SCRIPT_DIRECTORY/start.sh" || { printf 'start.sh failed.\n' >&2; return 1; }
 	else
 		printf 'stop.sh failed, skipping start.\n' >&2
+		return 1
 	fi
 }
 
@@ -227,8 +228,38 @@ log_sink() {
 	done
 }
 
+recover_if_due() {
+	local ts="$1" uptime_seconds="$2"
+	if (( recovery_attempted && uptime_seconds - last_recovery < 600 )); then
+		return 0
+	fi
+	if (( recovery_pending )); then
+		((recovery_failures+=1))
+		recovery_pending=0
+	fi
+	if (( recovery_failures >= 3 )); then
+		printf '[%s] Auto-recovery failed three times in a row; stopping the scheduler.\n' "$ts" >&2
+		set_scheduler_state 0 || true
+		return 1
+	fi
+	last_recovery="$uptime_seconds"
+	recovery_attempted=1
+	printf '[%s] ⚠ Auto-recovery: restarting the server (attempt %s of 3)\n' "$ts" "$((recovery_failures + 1))"
+	if restart_server; then
+		recovery_pending=1
+	else
+		((recovery_failures+=1))
+	fi
+	if (( recovery_failures >= 3 )); then
+		printf '[%s] Auto-recovery failed three times in a row; stopping the scheduler.\n' "$(date +%H:%M:%S)" >&2
+		set_scheduler_state 0 || true
+		return 1
+	fi
+}
+
 run_loop() {
-	local last_checked="" now ts auto_recover server_state
+	local last_checked="" now ts auto_recover server_state uptime_seconds uptime_fraction
+	local recovery_failures=0 recovery_pending=0 last_recovery=0 recovery_attempted=0
 	HEALTH_OK=1
 	HEALTH_DETAILS=""
 
@@ -259,9 +290,13 @@ run_loop() {
 			else
 				check_server_health
 				log_health "$ts"
-				if [[ "$auto_recover" == "1" ]] && (( ! HEALTH_OK )); then
-					printf '[%s] ⚠ Auto-recovery: restarting the server\n' "$ts"
-					restart_server || true
+				if (( HEALTH_OK )); then
+					recovery_failures=0
+					recovery_pending=0
+				elif [[ "$auto_recover" == "1" ]]; then
+					read -r uptime_seconds uptime_fraction < /proc/uptime
+					uptime_seconds="${uptime_seconds%%.*}"
+					recover_if_due "$ts" "$uptime_seconds" || return 1
 				fi
 			fi
 		fi
@@ -312,7 +347,6 @@ case "${1:-}" in
 			exit 1
 		fi
 		tmux new-session -d -s "$SESSION_NAME" -c "$SCRIPT_DIRECTORY" < /dev/null "$(printf 'exec %q run' "$SCRIPT_DIRECTORY/scheduler.sh")"
-		tmux set-option -t "$SESSION_NAME" -w remain-on-exit on 2>/dev/null || true
 		# Scrollable output, no input: the session uses an almost empty key table, so
 		# typed keys and mouse clicks are discarded. Only the wheel (scrolling) and the
 		# prefix key (Ctrl+b, e.g. for detach) are bound.
