@@ -227,7 +227,7 @@ parse_gamedig_output() {
 	printf "  Server IP: %s\n" "$(echo "$json" | jq -r '.connect // "N/A"')"
 	
 	local player_count=$(echo "$json" | jq -r '.players | length // 0')
-	if [[ "$player_count" -gt 0 ]]; then
+	if [[ "${2:-}" != "summary" && "$player_count" -gt 0 ]]; then
 		printf "\n  Connected Players:\n"
 		echo "$json" | jq -r '.players[] | "    - \(.name) (Score: \(.score // 0), Time: \(.time // 0)s)"' 2>/dev/null || true
 	fi
@@ -236,6 +236,29 @@ parse_gamedig_output() {
 # ============================================================================
 # MAIN SCRIPT
 # ============================================================================
+
+# Show only GameDig information when called from the menu.
+if [[ "${1:-}" == "--gamedig" ]]; then
+	SERVER_IP="$(read_setting "$SERVER_CONFIG" SERVER_IP)"
+	GAME_PORT="$(read_setting "$SERVER_CONFIG" GAME_PORT)"
+	QUERY_HOST="$SERVER_IP"
+	[[ -z "$QUERY_HOST" || "$QUERY_HOST" == "0.0.0.0" ]] && QUERY_HOST="127.0.0.1"
+	if ! command -v gamedig &>/dev/null; then
+		printf 'Status: unavailable (GameDig is not installed)\n'
+		exit 1
+	fi
+	if ! command -v jq &>/dev/null; then
+		printf 'Status: unavailable (jq is not installed)\n'
+		exit 1
+	fi
+	if ! gamedig_output="$(query_gamedig "$QUERY_HOST" "$GAME_PORT")" || ! jq -e 'type == "object"' >/dev/null 2>&1 <<< "$gamedig_output"; then
+		printf 'Status: unavailable (server query failed)\n'
+		exit 1
+	fi
+	printf 'Status: online\n'
+	parse_gamedig_output "$gamedig_output" summary
+	exit 0
+fi
 
 printf "╔════════════════════════════════════════════════════════════════════╗\n"
 printf "║ DayZ Server Status Report: %s\n" "$SERVER_NAME"
