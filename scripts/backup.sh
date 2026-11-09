@@ -100,6 +100,9 @@ create_backup() {
 	# Find and move log files and error scripts from serverdata
 	find "$SERVERDATA_DIRECTORY" -maxdepth 1 \( -iname "*.log" -o -iname "*.rpt" -o -iname "*.adm" -o -iname "*error*" \) -type f -exec mv -- {} "$CLEANUP_FOLDER/" \; 2>/dev/null || true
 
+	# Archive the scheduler logs (<server>/ugsm/logs); the scheduler recreates today's file on its next write
+	find "$UGSM_DIRECTORY/logs" -maxdepth 1 -name "*.log" -type f -exec mv -- {} "$CLEANUP_FOLDER/" \; 2>/dev/null || true
+
 	# Clean up old cleanup folders in profiles, keep only the 8 most recent
 	CLEANUP_COUNT=$(find "$PROFILES_CLEANUP_DIR" -maxdepth 1 -type d | grep -v "^$PROFILES_CLEANUP_DIR$" | wc -l)
 	if (( CLEANUP_COUNT > 8 )); then

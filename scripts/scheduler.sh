@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Checks every minute whether one of the restart times from
-# config/scheduler.conf has been reached. With AUTO_RECOVER=1 it also checks
+# Checks every minute whether one of the restart times or maintenance times
+# from config/scheduler.conf has been reached. At a maintenance time the server
+# is stopped, the MAINTENANCE_COMMAND lines are run one after another and the
+# server is started again (if MAINTENANCE_START_SERVER=1). With AUTO_RECOVER=1 it also checks
 # that the server is healthy and restarts it if it is not.
 # Usage: scheduler.sh start|stop|status
 #   start   runs the scheduler in a background tmux session
@@ -17,6 +19,8 @@ SERVER_NAME="$(basename -- "$SERVER_DIRECTORY")"
 SCHEDULER_CONFIG="$PROJECT_DIRECTORY/config/scheduler.conf"
 SERVER_CONFIG="$PROJECT_DIRECTORY/install/${SERVER_NAME}_server.conf"
 SESSION_NAME="${SERVER_NAME}_scheduler"
+LOG_DIRECTORY="$PROJECT_DIRECTORY/logs"
+LOG_RETENTION_DAYS=14
 
 if [[ ! -r "$SCHEDULER_CONFIG" ]]; then
 	printf 'Config file is missing or unreadable: %s\n' "$SCHEDULER_CONFIG" >&2
@@ -48,6 +52,61 @@ read_restart_times() {
 	read_setting "$SCHEDULER_CONFIG" RESTART_TIMES
 }
 
+# Print all values of a repeatable setting (one per line), in file order.
+# Commented-out lines are ignored because the key must start the line.
+read_setting_all() {
+	awk -v key="$2" '
+	{
+		separator = index($0, "=")
+		if (separator == 0) next
+		name = substr($0, 1, separator - 1)
+		gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
+		if (name != key) next
+		value = substr($0, separator + 1)
+		gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+		if (value ~ /^".*"$/) {
+			sub(/^"/, "", value)
+			sub(/"$/, "", value)
+		}
+		if (value != "") print value
+	}' "$1"
+}
+
+# Stop the server, run the configured maintenance commands, then start it again.
+run_maintenance() {
+	local ts="$1" command rc start_after
+	local commands=()
+	mapfile -t commands < <(read_setting_all "$SCHEDULER_CONFIG" MAINTENANCE_COMMAND)
+	start_after="$(read_setting "$SCHEDULER_CONFIG" MAINTENANCE_START_SERVER)"
+
+	printf '[%s] Wartung gestartet: Server wird gestoppt\n' "$ts"
+	if ! "$SCRIPT_DIRECTORY/stop.sh"; then
+		printf '[%s] ✗ stop.sh fehlgeschlagen, Wartung abgebrochen\n' "$(date +%H:%M:%S)"
+		return 0
+	fi
+
+	if (( ${#commands[@]} == 0 )); then
+		printf '[%s] Keine MAINTENANCE_COMMAND konfiguriert\n' "$(date +%H:%M:%S)"
+	fi
+	for command in "${commands[@]}"; do
+		printf '[%s] ▶ %s\n' "$(date +%H:%M:%S)" "$command"
+		rc=0
+		bash -c "$command" </dev/null || rc=$?
+		if (( rc == 0 )); then
+			printf '[%s] ✓ fertig (Exit 0): %s\n' "$(date +%H:%M:%S)" "$command"
+		else
+			printf '[%s] ✗ Fehler (Exit %s): %s\n' "$(date +%H:%M:%S)" "$rc" "$command"
+		fi
+	done
+
+	if [[ "$start_after" == "0" ]]; then
+		printf '[%s] Wartung beendet, Server bleibt gestoppt (MAINTENANCE_START_SERVER=0)\n' "$(date +%H:%M:%S)"
+	else
+		printf '[%s] Wartung beendet, Server wird gestartet\n' "$(date +%H:%M:%S)"
+		"$SCRIPT_DIRECTORY/start.sh" || printf '[%s] ✗ start.sh fehlgeschlagen\n' "$(date +%H:%M:%S)"
+	fi
+}
+
 restart_server() {
 	if "$SCRIPT_DIRECTORY/stop.sh"; then
 		"$SCRIPT_DIRECTORY/start.sh" || printf 'start.sh failed.\n' >&2
@@ -56,85 +115,93 @@ restart_server() {
 	fi
 }
 
-# Check if a UDP port is actively bound on the system.
+# Same socket check as status.sh. Returns 0 bound, 1 not bound/invalid, 2 unknown (no ss/netstat).
 check_udp_port_bound() {
 	local port="$1"
-	
-	if [[ -z "$port" ]] || [[ ! "$port" =~ ^[0-9]{1,5}$ ]] || (( 10#$port < 1 || 10#$port > 65535 )); then
+
+	if [[ ! "$port" =~ ^[0-9]{1,5}$ ]] || (( 10#$port < 1 || 10#$port > 65535 )); then
 		return 1
 	fi
-	
+
 	if command -v ss &>/dev/null; then
-		ss -H -u -l -n "sport = :$((10#$port))" 2>/dev/null | grep -q . && return 0
+		ss -H -u -l -n "sport = :$((10#$port))" 2>/dev/null | grep -q .
 	elif command -v netstat &>/dev/null; then
-		netstat -uln 2>/dev/null | awk -v port="$((10#$port))" '$4 ~ (":" port "$") { found = 1 } END { exit !found }' && return 0
+		netstat -uln 2>/dev/null | awk -v port="$((10#$port))" '$4 ~ (":" port "$") { found = 1 } END { exit !found }'
+	else
+		return 2
 	fi
-	return 1
 }
 
-# Performs detailed server health checks and displays results.
-# Returns 0 (unhealthy) if any check fails, 1 (healthy) if all pass.
+# Runs all health checks. Sets HEALTH_OK (1|0) and HEALTH_DETAILS; always returns 0.
 check_server_health() {
-	local state user game_port steam_port rcon_port port check_results=""
-	local health_status="✓ HEALTHY"
-	
-	# Validate config files exist
+	local state user game_port steam_port rcon_port port label
+	HEALTH_OK=1
+	HEALTH_DETAILS=""
+
 	if [[ ! -r "$SERVER_CONFIG" ]]; then
-		printf '✗ UNHEALTHY | CONFIG: ✗ missing'
+		HEALTH_OK=0
+		HEALTH_DETAILS="CONFIG: ✗ missing"
 		return 0
 	fi
-	
-	# Check 1: Server STATE
+
 	state="$(read_setting "$SERVER_CONFIG" STATE)" || state="unknown"
 	if [[ "$state" != "running" ]]; then
-		check_results+=" | STATE: ✗ $state"
-		health_status="✗ UNHEALTHY"
-	else
-		check_results+=" | STATE: ✓ running"
+		HEALTH_OK=0
+		HEALTH_DETAILS="STATE: ✗ ${state:-unknown}"
+		return 0
 	fi
-	
-	[[ "$state" != "running" ]] && { printf '%s%s' "$health_status" "$check_results"; return 0; }
 
 	user="$(read_setting "$SERVER_CONFIG" NEW_USER)" || user="unknown"
 	game_port="$(read_setting "$SERVER_CONFIG" GAME_PORT)" || game_port="0"
 	steam_port="$(read_setting "$SERVER_CONFIG" STEAM_QUERY_PORT)" || steam_port="0"
 	rcon_port="$(read_setting "$SERVER_CONFIG" RCON_PORT)" || rcon_port="0"
 
-	# Check 2: Tmux Session
 	local tmux_cmd=(tmux)
 	[[ "$(id -un)" != "$user" ]] && tmux_cmd=(sudo -u "$user" tmux)
 	if "${tmux_cmd[@]}" has-session -t "=$SERVER_NAME" 2>/dev/null; then
-		check_results+=" | TMUX: ✓ active"
+		HEALTH_DETAILS+="tmux session: ✓ ok"
 	else
-		check_results+=" | TMUX: ✗ missing"
-		health_status="✗ UNHEALTHY"
+		HEALTH_DETAILS+="tmux session: ✗ missing"
+		HEALTH_OK=0
 	fi
-	
-	# Check 3: DayZServer Process
+
 	if pgrep -u "$user" -f DayZServer >/dev/null 2>&1; then
-		check_results+=" | PROC: ✓"
+		HEALTH_DETAILS+=" | dayz process: ✓ ok"
 	else
-		check_results+=" | PROC: ✗"
-		health_status="✗ UNHEALTHY"
+		HEALTH_DETAILS+=" | dayz process: ✗ missing"
+		HEALTH_OK=0
 	fi
-	
-	# Check 4: UDP Ports
-	for port in "$game_port" "$steam_port" "$rcon_port"; do
-		if check_udp_port_bound "$port"; then
-			check_results+=" | PORT$((10#$port)): ✓"
-		else
-			check_results+=" | PORT$((10#$port)): ✗"
-			health_status="✗ UNHEALTHY"
-		fi
+
+	for label in "game port:$game_port" "steam query port:$steam_port" "rcon port:$rcon_port"; do
+		port="${label##*:}"
+		local rc=0
+		check_udp_port_bound "$port" || rc=$?
+		case "$rc" in
+			0) HEALTH_DETAILS+=" | ${label%:*}: ✓ ok" ;;
+			2) HEALTH_DETAILS+=" | ${label%:*}: ? unknown (ss/netstat fehlt)" ;;
+			*) HEALTH_DETAILS+=" | ${label%:*}: ✗ not bound"; HEALTH_OK=0 ;;
+		esac
 	done
-	
-	printf '%s%s' "$health_status" "$check_results"
-	[[ "$health_status" == "✗ UNHEALTHY" ]] && return 0 || return 1
+	return 0
 }
 
-restart_due() {
-	local now="$1" time
-	for time in $(read_restart_times); do
+# Prints the current health result; on failure also dumps status.sh for debugging.
+log_health() {
+	local ts="$1"
+	if (( HEALTH_OK )); then
+		printf '[%s] Letzter Check: ✓ HEALTHY | %s\n' "$ts" "$HEALTH_DETAILS"
+	else
+		printf '[%s] Letzter Check: ✗ UNHEALTHY | %s\n' "$ts" "$HEALTH_DETAILS"
+		printf '[%s] --- status.sh Ausgabe ---\n' "$ts"
+		"$SCRIPT_DIRECTORY/status.sh" 2>&1 || true
+		printf '[%s] --- Ende status.sh ---\n' "$ts"
+	fi
+}
+
+# Usage: time_due HH:MM KEY  (KEY is a time-list setting such as RESTART_TIMES)
+time_due() {
+	local now="$1" key="$2" time
+	for time in $(read_setting "$SCHEDULER_CONFIG" "$key"); do
 		if [[ ! "$time" =~ ^([01][0-9]|2[0-3]):[0-5][0-9]$ ]]; then
 			printf 'Ignoring invalid time in %s: %s\n' "$SCHEDULER_CONFIG" "$time" >&2
 			continue
@@ -144,51 +211,58 @@ restart_due() {
 	return 1
 }
 
+# Copies every line to the console and to logs/scheduler-YYYY-MM-DD.log
+# (one file per day, files older than LOG_RETENTION_DAYS are deleted).
+log_sink() {
+	local line day last_day=""
+	mkdir -p -- "$LOG_DIRECTORY" 2>/dev/null || true
+	while IFS= read -r line; do
+		printf '%s\n' "$line"
+		day="$(date +%F)"
+		if [[ "$day" != "$last_day" ]]; then
+			last_day="$day"
+			find "$LOG_DIRECTORY" -maxdepth 1 -name 'scheduler-*.log' -mtime "+$LOG_RETENTION_DAYS" -delete 2>/dev/null || true
+		fi
+		printf '%s\n' "$line" >> "$LOG_DIRECTORY/scheduler-$day.log" 2>/dev/null || true
+	done
+}
+
 run_loop() {
-	local last_checked="" now reason auto_recover last_check_result last_check_time
-	
+	local last_checked="" now ts auto_recover server_state
+	HEALTH_OK=1
+	HEALTH_DETAILS=""
+
 	# Block all input to prevent accidental interruption or interaction
 	exec 0</dev/null
-	
+
 	auto_recover="$(read_setting "$SCHEDULER_CONFIG" AUTO_RECOVER)"
-	
-	printf '╔════════════════════════════════════════════════════════╗\n'
-	printf '║ DayZ Server Scheduler Started                          ║\n'
-	printf '║ Server: %s\n' "$SERVER_NAME"
-	printf '║ Config: %s\n' "$SCHEDULER_CONFIG"
-	printf '║ Auto-Recover: %s\n' "$([[ "$auto_recover" == "1" ]] && echo "ENABLED" || echo "DISABLED")"
-	printf '║ Restart Times: %s\n' "$(read_restart_times)"
-	printf '║ Input: DISABLED (read-only mode)\n'
-	printf '╚════════════════════════════════════════════════════════╝\n'
-	
-	last_check_result="Starting up..."
-	last_check_time="--:--"
-	
+
+	printf '[%s] Scheduler gestartet | Server: %s | Auto-Recover: %s | Restart-Zeiten: %s | Wartung: %s\n' \
+		"$(date +%H:%M:%S)" "$SERVER_NAME" "$([[ "$auto_recover" == "1" ]] && echo ON || echo OFF)" "$(read_restart_times)" "$(read_setting "$SCHEDULER_CONFIG" MAINTENANCE_TIMES)"
+
 	while true; do
 		now="$(date +%H:%M)"
 		if [[ "$now" != "$last_checked" ]]; then
 			last_checked="$now"
-			last_check_time="$now"
-			
-			# Re-read settings every minute to detect config changes
+			ts="$(date +%H:%M:%S)"
 			auto_recover="$(read_setting "$SCHEDULER_CONFIG" AUTO_RECOVER)"
-			
-			# Get current server state for display
-			local server_state="$(read_setting "$SERVER_CONFIG" STATE)"
-			local state_display="${server_state^^}"  # Convert to uppercase
-			
-			if restart_due "$now"; then
-				last_check_result="✓ Scheduled restart at $now"
-				printf '[%s] %-40s │ State: %-10s │ %s\n' "$now" "SCHEDULED RESTART" "$state_display" "Auto-Recover: $([[ "$auto_recover" == "1" ]] && echo "ON" || echo "OFF")"
-				restart_server
-			elif [[ "$auto_recover" == "1" ]] && health_result="$(check_server_health)" && [[ "$(echo "$health_result" | cut -d' ' -f1)" == "✗" ]]; then
-				last_check_result="⚠ Auto-Recovery triggered"
-				health_details="$(echo "$health_result" | cut -d' ' -f2-)"
-				printf '[%s] AUTO-RECOVERY RESTART: %s\n' "$now" "$health_details"
-				restart_server
+			server_state="$(read_setting "$SERVER_CONFIG" STATE)" || server_state="unknown"
+
+			printf '[%s] Scheduler: ✓ läuft wie geplant | Server-Status: %s | Auto-Recover: %s\n' \
+				"$ts" "${server_state:-unknown}" "$([[ "$auto_recover" == "1" ]] && echo ON || echo OFF)"
+
+			if time_due "$now" MAINTENANCE_TIMES; then
+				run_maintenance "$ts"
+			elif time_due "$now" RESTART_TIMES; then
+				printf '[%s] Geplanter Neustart um %s\n' "$ts" "$now"
+				restart_server || true
 			else
-				health_result="$(check_server_health)"
-				printf '[%s] %s\n' "$now" "$health_result"
+				check_server_health
+				log_health "$ts"
+				if [[ "$auto_recover" == "1" ]] && (( ! HEALTH_OK )); then
+					printf '[%s] ⚠ Auto-Recovery: Neustart wird ausgeführt\n' "$ts"
+					restart_server || true
+				fi
 			fi
 		fi
 		# Sleep until the start of the next minute.
@@ -239,6 +313,15 @@ case "${1:-}" in
 		fi
 		tmux new-session -d -s "$SESSION_NAME" -c "$SCRIPT_DIRECTORY" < /dev/null "$(printf 'exec %q run' "$SCRIPT_DIRECTORY/scheduler.sh")"
 		tmux set-option -t "$SESSION_NAME" -w remain-on-exit on 2>/dev/null || true
+		# Scrollable output, no input: the session uses an almost empty key table, so
+		# typed keys and mouse clicks are discarded. Only the wheel (scrolling) and the
+		# prefix key (Ctrl+b, e.g. for detach) are bound.
+		tmux set-option -t "$SESSION_NAME" history-limit 50000 2>/dev/null || true
+		tmux set-option -t "$SESSION_NAME" mouse on 2>/dev/null || true
+		tmux set-option -t "$SESSION_NAME" key-table scheduler_locked 2>/dev/null || true
+		tmux bind-key -T scheduler_locked C-b switch-client -T prefix 2>/dev/null || true
+		tmux bind-key -T scheduler_locked WheelUpPane copy-mode -e 2>/dev/null || true
+		tmux bind-key -T scheduler_locked WheelDownPane copy-mode -e 2>/dev/null || true
 		set_scheduler_state 1
 		printf 'Scheduler started in tmux session "%s".\n' "$SESSION_NAME"
 		printf 'To view logs: tmux attach -t %s\n' "$SESSION_NAME"
@@ -255,36 +338,14 @@ case "${1:-}" in
 		;;
 	status)
 		if session_active; then
-			local auto_recover restart_times scheduler_state
-			auto_recover="$(read_setting "$SCHEDULER_CONFIG" AUTO_RECOVER)"
-			restart_times="$(read_restart_times)"
-			scheduler_state="$(read_setting "$SERVER_CONFIG" SCHEDULER_STATE)"
-			
-			printf '\n┌─ Scheduler Status ────────────────────────────────────┐\n'
-			printf '│ Status: ✓ RUNNING\n'
-			printf '│ Session Name: %s\n' "$SESSION_NAME"
-			printf '│ Server: %s\n' "$SERVER_NAME"
-			printf '│\n'
-			printf '│ Configuration:\n'
-			printf '│   Auto-Recover: %s\n' "$([[ "$auto_recover" == "1" ]] && echo "ENABLED" || echo "DISABLED")"
-			printf '│   Restart Times: %s\n' "$restart_times"
-			printf '│   Scheduler State: %s\n' "$scheduler_state"
-			printf '│\n'
-			printf '│ To view logs: tmux attach -t %s\n' "$SESSION_NAME"
-			printf '│ To stop: %s stop\n' "$0"
-			printf '└────────────────────────────────────────────────────────┘\n\n'
+			printf 'Scheduler: ✓ AKTIV (tmux session "%s")\n' "$SESSION_NAME"
 		else
-			printf '\n┌─ Scheduler Status ────────────────────────────────────┐\n'
-			printf '│ Status: ✗ NOT RUNNING\n'
-			printf '│ Session Name: %s\n' "$SESSION_NAME"
-			printf '│\n'
-			printf '│ To start: %s start\n' "$0"
-			printf '└────────────────────────────────────────────────────────┘\n\n'
+			printf 'Scheduler: ✗ NICHT AKTIV\n'
 		fi
 		;;
 	run)
 		# Internal: runs inside the tmux session.
-		run_loop
+		run_loop 2>&1 | log_sink
 		;;
 	*)
 		printf 'Usage: %s start|stop|status\n' "$0" >&2
