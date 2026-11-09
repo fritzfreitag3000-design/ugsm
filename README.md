@@ -1,9 +1,6 @@
 # ugsm
 
-Start a registered server's tmux dashboard from any directory with
-`ugsm <server-name>` (for example, `ugsm my-server`). The server is registered
-by `install/install.sh`; after updating the UGSM copy on an existing server, run
-`sudo /path/to/server/ugsm/scripts/install_command.sh` once. Run `ugsm` as the
+Start the tmux dashboard with `scripts/dashboard.sh [server-name]`. Run it as the
 Linux user that owns that server's tmux sessions. It opens the interactive
 UGSM menu in the upper-left pane, the server console output in the upper-right,
 and the scheduler output across the bottom. The server and scheduler output

@@ -107,23 +107,6 @@ fi
 
 DASHBOARD_SESSION="${SERVER_NAME}_dashboard"
 
-if [[ "$(basename -- "$SERVER_DIRECTORY")" != "$SERVER_NAME" ]]; then
-	REGISTRY_FILE="/etc/ugsm/servers/$SERVER_NAME"
-	if [[ -f "$REGISTRY_FILE" && ! -L "$REGISTRY_FILE" ]]; then
-		IFS= read -r REGISTERED_PROJECT < "$REGISTRY_FILE" || {
-			printf 'Invalid UGSM registry entry: %s\n' "$REGISTRY_FILE" >&2
-			exit 1
-		}
-		if [[ "$REGISTERED_PROJECT" == /* && "$REGISTERED_PROJECT" != "$PROJECT_DIRECTORY" \
-			&& -x "$REGISTERED_PROJECT/scripts/dashboard.sh" ]]; then
-			exec "$REGISTERED_PROJECT/scripts/dashboard.sh" "$SERVER_NAME"
-		fi
-	fi
-	printf 'This is not the installed server directory for "%s". Run ugsm %s after registering the server.\n' \
-		"$SERVER_NAME" "$SERVER_NAME" >&2
-	exit 1
-fi
-
 if ! command -v tmux >/dev/null 2>&1; then
 	printf 'tmux is not installed.\n' >&2
 	exit 1

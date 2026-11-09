@@ -623,12 +623,6 @@ else
 	printf 'Copied the ugsm folder to: %s\n' "$UGSM_COPY"
 fi
 
-# Register the server dashboard as a global command.
-if ! "$PROJECT_ROOT/scripts/install_command.sh" "$UGSM_COPY"; then
-	printf 'Could not install the global UGSM dashboard command.\n' >&2
-	exit 1
-fi
-
 # Run the copied DayZ installer as the new server user.
 DAYZ_INSTALL_DIR="$UGSM_COPY/install"
 printf 'Running the DayZ installer as %s.\n' "$NEW_USER"
