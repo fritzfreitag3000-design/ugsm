@@ -55,6 +55,7 @@ REQUIRED_PACKAGES=(
 	vsftpd
 	openssl
 	sudo
+	systemd
 	ufw
 	util-linux
 	nodejs
@@ -418,6 +419,155 @@ if [[ "$SUDOERS_ALREADY_INSTALLED" -eq 0 ]]; then
 	printf 'Granted %s permission to open and close only the configured UDP ports with sudo ufw.\n' "$NEW_USER"
 fi
 
+UGSM_COPY="$SERVER_DIRECTORY/ugsm"
+
+# Keep the privileged helper in root-owned directories outside the user's home.
+AUTOSTART_BASE="/etc/ugsm-scheduler-autostart"
+AUTOSTART_DIR="$AUTOSTART_BASE/$NEW_USER/$SERVER_NAME"
+AUTOSTART_HELPER="$AUTOSTART_DIR/scheduler-autostart"
+AUTOSTART_SETTINGS="$AUTOSTART_DIR/settings"
+AUTOSTART_ID="$(printf '%s\0%s' "$NEW_USER" "$SERVER_NAME" | sha256sum | cut -c1-32)"
+AUTOSTART_SUDOERS="/etc/sudoers.d/ugsm-scheduler-$AUTOSTART_ID"
+SCHEDULER_PATH="$UGSM_COPY/scripts/scheduler.sh"
+if [[ "$SCHEDULER_PATH" == *$'\n'* || "$SCHEDULER_PATH" == *$'\r'* ]]; then
+	printf 'The scheduler path must not contain line breaks.\n' >&2
+	exit 1
+fi
+for directory in "$AUTOSTART_BASE" "$AUTOSTART_BASE/$NEW_USER" "$AUTOSTART_DIR"; do
+	if [[ ! -e "$directory" && ! -L "$directory" ]]; then
+		mkdir -m 0755 -- "$directory"
+	fi
+	if [[ ! -d "$directory" || -L "$directory" ]] || [[ "$(stat -c '%u' "$directory")" != 0 ]] || (( (8#$(stat -c '%a' "$directory") & 8#022) != 0 )); then
+		printf 'Unsafe scheduler helper directory: %s\n' "$directory" >&2
+		exit 1
+	fi
+done
+
+# Keep fixed instance settings and the helper owned and writable only by root.
+TEMP_AUTOSTART_SETTINGS="$(mktemp "$AUTOSTART_DIR/.settings.XXXXXX")"
+trap 'rm -f -- "$TEMP_AUTOSTART_SETTINGS"' EXIT
+{
+	printf 'SERVER_NAME=%q\n' "$SERVER_NAME"
+	printf 'SERVER_USER=%q\n' "$NEW_USER"
+	printf 'SCHEDULER=%q\n' "$SCHEDULER_PATH"
+	printf 'SERVICE_NAME=%q\n' "ugsm-scheduler-${SERVER_NAME}.service"
+} > "$TEMP_AUTOSTART_SETTINGS"
+chmod 0644 "$TEMP_AUTOSTART_SETTINGS"
+if [[ -e "$AUTOSTART_SETTINGS" || -L "$AUTOSTART_SETTINGS" ]]; then
+	if [[ ! -f "$AUTOSTART_SETTINGS" || -L "$AUTOSTART_SETTINGS" ]] || [[ "$(stat -c '%u:%a' "$AUTOSTART_SETTINGS")" != '0:644' ]] || ! cmp -s -- "$TEMP_AUTOSTART_SETTINGS" "$AUTOSTART_SETTINGS"; then
+		printf 'Existing scheduler helper settings do not match: %s\n' "$AUTOSTART_SETTINGS" >&2
+		exit 1
+	fi
+else
+	ln -- "$TEMP_AUTOSTART_SETTINGS" "$AUTOSTART_SETTINGS"
+fi
+rm -- "$TEMP_AUTOSTART_SETTINGS"
+trap - EXIT
+TEMP_AUTOSTART_HELPER="$(mktemp "$AUTOSTART_DIR/.helper.XXXXXX")"
+trap 'rm -f -- "$TEMP_AUTOSTART_HELPER"' EXIT
+cat > "$TEMP_AUTOSTART_HELPER" <<'AUTOSTART_HELPER_SCRIPT'
+#!/bin/bash
+set -euo pipefail
+
+# Only the root-owned copy and its root-owned settings may manage systemd.
+if [[ "$EUID" -ne 0 ]]; then
+	printf 'This helper must run as root.\n' >&2
+	exit 1
+fi
+if [[ "$#" -ne 1 || ( "$1" != install && "$1" != uninstall ) ]]; then
+	printf 'Usage: %s install|uninstall\n' "$0" >&2
+	exit 1
+fi
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+HELPER_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+source "$HELPER_DIR/settings"
+
+if [[ ! -d /run/systemd/system ]] || ! command -v systemctl >/dev/null 2>&1; then
+	printf 'A running systemd system is required.\n' >&2
+	exit 1
+fi
+
+# Escape the fixed scheduler path for the systemd unit.
+SCHEDULER_PATH="${SCHEDULER//\\/\\\\}"
+SCHEDULER_PATH="${SCHEDULER_PATH//\"/\\\"}"
+SCHEDULER_PATH="${SCHEDULER_PATH//%/%%}"
+SERVICE_FILE="/etc/systemd/system/$SERVICE_NAME"
+EXEC_START="ExecStart=/bin/bash \"$SCHEDULER_PATH\" start"
+
+if [[ "$1" == uninstall ]]; then
+	if [[ ! -f "$SERVICE_FILE" || -L "$SERVICE_FILE" ]] || ! grep -Fxq -- "$EXEC_START" "$SERVICE_FILE"; then
+		printf 'Scheduler service is missing or belongs to another installation: %s\n' "$SERVICE_FILE" >&2
+		exit 1
+	fi
+	systemctl disable "$SERVICE_NAME"
+	rm -- "$SERVICE_FILE"
+	systemctl daemon-reload
+	printf 'Scheduler autostart removed. A running scheduler was not stopped.\n'
+	exit 0
+fi
+
+if [[ ! -x "$SCHEDULER" ]] || ! getent passwd "$SERVER_USER" >/dev/null; then
+	printf 'Scheduler is not executable or server user does not exist.\n' >&2
+	exit 1
+fi
+TEMP_SERVICE="$(mktemp /etc/systemd/system/.ugsm-scheduler.XXXXXX)"
+trap 'rm -f -- "$TEMP_SERVICE"' EXIT
+printf '%s\n' \
+	'[Unit]' \
+	"Description=UGSM scheduler for $SERVER_NAME" \
+	'After=network-online.target' \
+	'Wants=network-online.target' \
+	'' \
+	'[Service]' \
+	'Type=oneshot' \
+	"User=$SERVER_USER" \
+	"$EXEC_START" \
+	'' \
+	'[Install]' \
+	'WantedBy=multi-user.target' > "$TEMP_SERVICE"
+chmod 0644 "$TEMP_SERVICE"
+if ! ln -- "$TEMP_SERVICE" "$SERVICE_FILE"; then
+	printf 'Could not create service; it may already exist: %s\n' "$SERVICE_FILE" >&2
+	exit 1
+fi
+systemctl daemon-reload
+systemctl enable "$SERVICE_NAME"
+printf 'Scheduler autostart enabled for %s. It will start at the next boot.\n' "$SERVER_USER"
+AUTOSTART_HELPER_SCRIPT
+if [[ -e "$AUTOSTART_HELPER" || -L "$AUTOSTART_HELPER" ]]; then
+	if [[ ! -f "$AUTOSTART_HELPER" || -L "$AUTOSTART_HELPER" ]] || [[ "$(stat -c '%u:%a' "$AUTOSTART_HELPER")" != '0:755' ]] || ! cmp -s -- "$TEMP_AUTOSTART_HELPER" "$AUTOSTART_HELPER"; then
+		printf 'Existing scheduler helper does not match: %s\n' "$AUTOSTART_HELPER" >&2
+		exit 1
+	fi
+else
+	install -o root -g root -m 0755 -- "$TEMP_AUTOSTART_HELPER" "$AUTOSTART_HELPER"
+fi
+rm -- "$TEMP_AUTOSTART_HELPER"
+trap - EXIT
+
+# Permit only the two fixed helper actions without a password.
+TEMP_AUTOSTART_SUDOERS="$(mktemp /etc/sudoers.d/.ugsm-scheduler.XXXXXX)"
+trap 'rm -f -- "$TEMP_AUTOSTART_SUDOERS"' EXIT
+printf '%s ALL=(root) NOPASSWD: %s install, %s uninstall\n' \
+	"$NEW_USER" "$AUTOSTART_HELPER" "$AUTOSTART_HELPER" > "$TEMP_AUTOSTART_SUDOERS"
+chmod 0440 "$TEMP_AUTOSTART_SUDOERS"
+if ! visudo -cf "$TEMP_AUTOSTART_SUDOERS"; then
+	printf 'Generated scheduler sudoers rules are invalid.\n' >&2
+	exit 1
+fi
+if [[ -e "$AUTOSTART_SUDOERS" || -L "$AUTOSTART_SUDOERS" ]]; then
+	if [[ ! -f "$AUTOSTART_SUDOERS" || -L "$AUTOSTART_SUDOERS" ]] || [[ "$(stat -c '%u:%a' "$AUTOSTART_SUDOERS")" != '0:440' ]] || ! cmp -s -- "$TEMP_AUTOSTART_SUDOERS" "$AUTOSTART_SUDOERS"; then
+		printf 'Existing scheduler sudoers rules do not match: %s\n' "$AUTOSTART_SUDOERS" >&2
+		exit 1
+	fi
+else
+	ln -- "$TEMP_AUTOSTART_SUDOERS" "$AUTOSTART_SUDOERS"
+fi
+rm -- "$TEMP_AUTOSTART_SUDOERS"
+trap - EXIT
+printf 'Granted %s passwordless access to scheduler autostart install and uninstall.\n' "$NEW_USER"
+
 # Configure UFW firewall with default rules and ask to enable it.
 printf '\n=== Configuring UFW Firewall ===\n'
 
@@ -457,7 +607,6 @@ case "$UFW_ENABLE_ANSWER" in
 esac
 
 # Copy the project folder into the server folder and assign it to the new user.
-UGSM_COPY="$SERVER_DIRECTORY/ugsm"
 SERVER_CONFIG_NAME="$(basename -- "$INSTALL_CONFIG")"
 if [[ -e "$UGSM_COPY" ]]; then
 	if [[ ! -d "$UGSM_COPY" || ! -f "$UGSM_COPY/install/install_dayz.sh" || ! -r "$UGSM_COPY/install/$SERVER_CONFIG_NAME" ]]; then
