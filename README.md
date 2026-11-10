@@ -1,5 +1,29 @@
 # ugsm
 
+## Workshop mods
+
+List client-required Workshop IDs in `config/mods.conf` and server-only IDs in
+`config/servermod.conf`, one ID per line without `#`. Run `scripts/mods.sh` to
+download the mods and create links named after their IDs in `serverdata`.
+Existing UGSM `@ID` links are migrated when the script runs. Run it again after
+removing an ID from both lists to uninstall that mod.
+
+`scripts/start.sh` uses these links in `-mod` and `-servermod`. Run
+`scripts/start.sh --print` to inspect the command before starting the server.
+For example, two client mods produce `-mod=1559212036;1564026768` as one
+argument; shell output may escape the semicolon.
+
+Every actual server start, including scheduler restarts, first runs SteamCMD to
+update and validate the DayZ server and all listed Workshop mods. A failed
+update cancels the start. The `--print` option does not run updates. SteamCMD
+is run as the configured server user, uses the `STEAM_USER` in the server
+configuration and may request a password or Steam Guard code. Scheduled starts
+have no interactive input and therefore require a working saved SteamCMD
+login; if authentication fails, the server will not start and the error
+appears in the scheduler output.
+
+## Dashboard
+
 Start the tmux dashboard with `scripts/dashboard.sh [server-name]`. Run it as the
 Linux user that owns that server's tmux sessions. It opens the interactive
 UGSM menu in the upper-left pane, the server console output in the upper-right,

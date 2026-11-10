@@ -3,11 +3,16 @@ set -euo pipefail
 
 # Installs, updates and removes DayZ Workshop mods and server-side mods.
 # Workshop IDs are read from config/mods.conf and config/servermod.conf.
-# Usage: mods.sh [SteamCMD username]
+# Usage: mods.sh [--update-server] [SteamCMD username]
 # Without an argument the username is read from install/<server name>_server.conf.
 
+UPDATE_SERVER=0
+if [[ "${1:-}" == "--update-server" ]]; then
+	UPDATE_SERVER=1
+	shift
+fi
 if [[ "$#" -gt 1 ]]; then
-	printf 'Usage: %s [SteamCMD username]\n' "$0" >&2
+	printf 'Usage: %s [--update-server] [SteamCMD username]\n' "$0" >&2
 	exit 2
 fi
 
@@ -19,6 +24,7 @@ STEAMCMD_DIRECTORY="$SERVER_DIRECTORY/steam"
 SERVERDATA_DIRECTORY="$SERVER_DIRECTORY/serverdata"
 KEYS_DIRECTORY="$SERVERDATA_DIRECTORY/keys"
 DAYZ_WORKSHOP_APP_ID="221100"
+DAYZ_SERVER_APP_ID="223350"
 WORKSHOP_CONTENT_DIRECTORY="$SERVERDATA_DIRECTORY/steamapps/workshop/content/$DAYZ_WORKSHOP_APP_ID"
 STATE_FILE="$SERVERDATA_DIRECTORY/.ugsm_mods.state"
 MODS_CONFIG="$PROJECT_DIRECTORY/config/mods.conf"
@@ -33,6 +39,12 @@ if [[ ! -d "$SERVERDATA_DIRECTORY" || ! -w "$SERVERDATA_DIRECTORY" ]]; then
 	printf 'Serverdata directory is missing or not writable: %s\n' "$SERVERDATA_DIRECTORY" >&2
 	exit 1
 fi
+for file in "$MODS_CONFIG" "$SERVERMODS_CONFIG"; do
+	if [[ ! -r "$file" ]]; then
+		printf 'Config file is missing or unreadable: %s\n' "$file" >&2
+		exit 1
+	fi
+done
 
 # Read the Steam user from the argument or from the server settings file.
 STEAM_USER="${1:-}"
@@ -75,16 +87,29 @@ done
 touch -- "$STATE_FILE"
 mkdir -p -- "$KEYS_DIRECTORY"
 
+remove_mod_link() {
+	local link="$1" id="$2"
+	if [[ -L "$link" && "$(readlink -- "$link")" == "$WORKSHOP_CONTENT_DIRECTORY/$id" ]]; then
+		rm -- "$link"
+	fi
+}
+
 # Remove mods that are no longer listed: link, keys and downloaded files.
 declare -A STALE=()
 while IFS='|' read -r id _; do
-	[[ -n "$id" && -z "${WANTED[$id]:-}" ]] && STALE["$id"]=1
+	if [[ ! "$id" =~ ^[0-9]+$ ]]; then
+		printf 'Invalid mod ID in %s: %s\n' "$STATE_FILE" "$id" >&2
+		exit 1
+	fi
+	[[ -z "${WANTED[$id]:-}" ]] && STALE["$id"]=1
 done < "$STATE_FILE"
-for link in "$SERVERDATA_DIRECTORY"/@*; do
+for link in "$SERVERDATA_DIRECTORY"/@* "$SERVERDATA_DIRECTORY"/[0-9]*; do
 	[[ -L "$link" ]] || continue
 	target="$(readlink -- "$link")"
 	[[ "$target" == "$WORKSHOP_CONTENT_DIRECTORY"/* ]] || continue
 	id="${target##*/}"
+	[[ "$id" =~ ^[0-9]+$ && ( "${link##*/}" == "$id" || "${link##*/}" == "@$id" ) ]] || continue
+	[[ "$target" == "$WORKSHOP_CONTENT_DIRECTORY/$id" ]] || continue
 	[[ -z "${WANTED[$id]:-}" ]] && STALE["$id"]=1
 done
 
@@ -96,7 +121,8 @@ if (( ${#STALE[@]} > 0 )); then
 	done < "$STATE_FILE" > "$NEW_STATE"
 	for id in "${!STALE[@]}"; do
 		printf 'Removing mod %s.\n' "$id"
-		rm -f -- "$SERVERDATA_DIRECTORY/@$id"
+		remove_mod_link "$SERVERDATA_DIRECTORY/@$id" "$id"
+		remove_mod_link "$SERVERDATA_DIRECTORY/$id" "$id"
 		while IFS='|' read -r state_id key; do
 			[[ "$state_id" == "$id" ]] || continue
 			# Keep keys that another installed mod still provides.
@@ -109,7 +135,7 @@ if (( ${#STALE[@]} > 0 )); then
 	mv -- "$NEW_STATE" "$STATE_FILE"
 fi
 
-if (( ${#ALL_IDS[@]} == 0 )); then
+if (( ${#ALL_IDS[@]} == 0 && ! UPDATE_SERVER )); then
 	printf 'No mods are listed in %s or %s.\n' "$MODS_CONFIG" "$SERVERMODS_CONFIG"
 	exit 0
 fi
@@ -123,17 +149,36 @@ else
 	printf 'SteamCMD will prompt for the login credentials.\n'
 fi
 DOWNLOAD_ARGS=()
+if (( UPDATE_SERVER )); then
+	DOWNLOAD_ARGS+=(+app_update "$DAYZ_SERVER_APP_ID" validate)
+fi
+declare -A DOWNLOAD_IDS=()
 for id in "${ALL_IDS[@]}"; do
+	[[ -n "${DOWNLOAD_IDS[$id]:-}" ]] && continue
+	DOWNLOAD_IDS["$id"]=1
 	DOWNLOAD_ARGS+=(+workshop_download_item "$DAYZ_WORKSHOP_APP_ID" "$id" validate)
 done
+STEAM_OUTPUT="$(mktemp)"
+trap 'rm -f -- "$STEAM_OUTPUT"' EXIT
 (
 	cd -- "$STEAMCMD_DIRECTORY"
 	./steamcmd.sh \
 		+force_install_dir "$SERVERDATA_DIRECTORY" \
 		"${STEAM_LOGIN_ARGS[@]}" \
 		"${DOWNLOAD_ARGS[@]}" \
-		+quit
-)
+		+quit 2>&1
+) | tee "$STEAM_OUTPUT"
+
+if (( UPDATE_SERVER )) && ! grep -Fq "Success! App '$DAYZ_SERVER_APP_ID' fully installed." "$STEAM_OUTPUT"; then
+	printf 'SteamCMD did not confirm the DayZ server update; aborting.\n' >&2
+	exit 1
+fi
+for id in "${!DOWNLOAD_IDS[@]}"; do
+	if ! grep -Fq "Success. Downloaded item $id to " "$STEAM_OUTPUT"; then
+		printf 'SteamCMD did not confirm the update of mod %s; aborting.\n' "$id" >&2
+		exit 1
+	fi
+done
 
 # Link each mod into serverdata and copy its keys (any letter case) into keys.
 FAILED=0
@@ -144,13 +189,19 @@ for id in "${ALL_IDS[@]}"; do
 		FAILED=1
 		continue
 	fi
-	link="$SERVERDATA_DIRECTORY/@$id"
+	link="$SERVERDATA_DIRECTORY/$id"
 	if [[ -e "$link" && ! -L "$link" ]]; then
 		printf 'Cannot link mod %s: %s exists and is not a link.\n' "$id" "$link" >&2
 		FAILED=1
 		continue
 	fi
+	if [[ -L "$link" && "$(readlink -- "$link")" != "$mod_directory" ]]; then
+		printf 'Cannot link mod %s: %s points elsewhere.\n' "$id" "$link" >&2
+		FAILED=1
+		continue
+	fi
 	ln -sfn -- "$mod_directory" "$link"
+	remove_mod_link "$SERVERDATA_DIRECTORY/@$id" "$id"
 
 	# Linux DayZ servers need lowercase file and folder names; rename deepest entries first.
 	while IFS= read -r -d '' entry; do
@@ -184,7 +235,7 @@ done
 join_links() {
 	local result="" id
 	for id in "$@"; do
-		result+="@$id;"
+		result+="$id;"
 	done
 	printf '%s' "${result%;}"
 }

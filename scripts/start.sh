@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Builds the DayZ server start command and runs it.
+# Updates the server and mods, then builds and runs the DayZ server start command.
 # IP and ports come from install/<server name>_server.conf, mods from config/mods.conf
 # and config/servermod.conf, all other parameters from config/start.conf.
 # After the start the console and RPT log are watched until the Hive is initialized,
@@ -27,7 +27,7 @@ START_CONFIG="$PROJECT_DIRECTORY/config/start.conf"
 MODS_CONFIG="$PROJECT_DIRECTORY/config/mods.conf"
 SERVERMODS_CONFIG="$PROJECT_DIRECTORY/config/servermod.conf"
 
-for file in "$SERVER_CONFIG" "$START_CONFIG"; do
+for file in "$SERVER_CONFIG" "$START_CONFIG" "$MODS_CONFIG" "$SERVERMODS_CONFIG"; do
 	if [[ ! -r "$file" ]]; then
 		printf 'Config file is missing or unreadable: %s\n' "$file" >&2
 		exit 1
@@ -108,19 +108,24 @@ read_ids() {
 		line="${line//$'\r'/}"
 		id=""
 		read -r id _ <<< "$line" || true
-		[[ "$id" =~ ^[0-9]+$ ]] && printf '%s\n' "$id"
+		[[ -z "$id" ]] && continue
+		if [[ ! "$id" =~ ^[0-9]+$ ]]; then
+			printf 'Ignoring invalid workshop ID "%s" in %s.\n' "$id" "$file" >&2
+			continue
+		fi
+		printf '%s\n' "$id"
 	done < "$file"
 }
 
-# Build "@id;@id" and warn about mods that are not installed yet.
+# Build "id;id" and require installed mod directories.
 join_mods() {
 	local result="" id
 	for id in "$@"; do
-		if [[ ! -e "$SERVERDATA_DIRECTORY/@$id" && ! -L "$SERVERDATA_DIRECTORY/@$id" ]]; then
-			printf 'Mod %s is not installed. Run mods.sh first.\n' "$id" >&2
-			exit 1
+		if [[ ! -d "$SERVERDATA_DIRECTORY/$id" ]]; then
+				printf 'Mod %s is not installed or its link is broken. Run mods.sh first.\n' "$id" >&2
+			return 1
 		fi
-		result+="@$id;"
+		result+="$id;"
 	done
 	printf '%s' "${result%;}"
 }
@@ -189,19 +194,6 @@ if [[ -n "$LIMITFPS" ]]; then
 	ARGS+=("-limitFPS=$LIMITFPS")
 fi
 
-mapfile -t MOD_IDS < <(read_ids "$MODS_CONFIG" | awk '!seen[$0]++')
-mapfile -t SERVERMOD_IDS < <(read_ids "$SERVERMODS_CONFIG" | awk '!seen[$0]++')
-if (( ${#MOD_IDS[@]} > 0 )); then
-	ARGS+=("-mod=$(join_mods "${MOD_IDS[@]}")")
-fi
-if (( ${#SERVERMOD_IDS[@]} > 0 )); then
-	ARGS+=("-servermod=$(join_mods "${SERVERMOD_IDS[@]}")")
-fi
-if [[ -n "$EXTRA_PARAMS" ]]; then
-	read -r -a EXTRA_ARRAY <<< "$EXTRA_PARAMS"
-	ARGS+=("${EXTRA_ARRAY[@]}")
-fi
-
 if ! command -v tmux >/dev/null 2>&1; then
 	printf 'tmux is not installed.\n' >&2
 	exit 1
@@ -242,6 +234,33 @@ if command -v ss >/dev/null 2>&1; then
 	done
 else
 	printf 'Warning: ss not found, port check skipped.\n' >&2
+fi
+
+if (( ! PRINT_ONLY )); then
+	printf 'Checking for DayZ server and Workshop mod updates before starting.\n'
+	UPDATE_CMD=(bash "$SCRIPT_DIRECTORY/mods.sh" --update-server)
+	if [[ "$(id -un)" != "$NEW_USER" ]]; then
+		UPDATE_CMD=(sudo -u "$NEW_USER" "${UPDATE_CMD[@]}")
+	fi
+	if ! "${UPDATE_CMD[@]}"; then
+		printf 'Server or mod update failed. Server start cancelled.\n' >&2
+		exit 1
+	fi
+fi
+
+mapfile -t MOD_IDS < <(read_ids "$MODS_CONFIG" | awk '!seen[$0]++')
+mapfile -t SERVERMOD_IDS < <(read_ids "$SERVERMODS_CONFIG" | awk '!seen[$0]++')
+if (( ${#MOD_IDS[@]} > 0 )); then
+	MODS="$(join_mods "${MOD_IDS[@]}")"
+	ARGS+=("-mod=$MODS")
+fi
+if (( ${#SERVERMOD_IDS[@]} > 0 )); then
+	SERVERMODS="$(join_mods "${SERVERMOD_IDS[@]}")"
+	ARGS+=("-servermod=$SERVERMODS")
+fi
+if [[ -n "$EXTRA_PARAMS" ]]; then
+	read -r -a EXTRA_ARRAY <<< "$EXTRA_PARAMS"
+	ARGS+=("${EXTRA_ARRAY[@]}")
 fi
 
 cd -- "$SERVERDATA_DIRECTORY"
