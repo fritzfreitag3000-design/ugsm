@@ -141,5 +141,5 @@ printf '==================================================\n'
 printf '       DAYZ SERVER INSTALLATION COMPLETE\n'
 printf '==================================================\n'
 printf 'Example test command (run as the server user):\n'
-printf 'cd %q && ./DayZServer -config=serverDZ.cfg -ip=%s -port=%s -profiles=profiles -BEpath=battleye/battleye -dologs -adminlog -netlog\n' \
+printf 'cd %q && ./DayZServer -config=serverDZ.cfg -ip=%s -port=%s -profiles=profiles -BEpath=battleye -dologs -adminlog -netlog\n' \
 	"$SERVERDATA_DIRECTORY" "$SERVER_IP" "$GAME_PORT"
