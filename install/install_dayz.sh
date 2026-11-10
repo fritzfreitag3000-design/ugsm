@@ -12,7 +12,7 @@ STEAM_USER="$2"
 SERVER_CONFIG="$3"
 STEAMCMD_DIRECTORY="$SERVER_DIRECTORY/steam"
 SERVERDATA_DIRECTORY="$SERVER_DIRECTORY/serverdata"
-BATTLEYE_DIRECTORY="$SERVERDATA_DIRECTORY/battleye/battleye"
+BATTLEYE_DIRECTORY="$SERVERDATA_DIRECTORY/battleye"
 BATTLEYE_CONFIG="$BATTLEYE_DIRECTORY/beserver_x64.cfg"
 STEAMCMD_URL="https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz"
 DAYZ_SERVER_APP_ID="223350"
@@ -126,7 +126,7 @@ cp -- "$DEFAULT_SERVER_CONFIG" "$SERVERDATA_DIRECTORY/serverDZ.cfg"
 printf 'Installed server config at %s/serverDZ.cfg.\n' "$SERVERDATA_DIRECTORY"
 
 # Create the BattlEye RCON settings using the configured port and password.
-mkdir -p -- "$BATTLEYE_DIRECTORY"
+mkdir -p -- "$BATTLEYE_DIRECTORY\battleye"
 umask 077
 printf 'RConPassword %s\nRConPort %s\n' "$RCON_PASS" "$RCON_PORT" > "$BATTLEYE_CONFIG"
 chmod 0600 "$BATTLEYE_CONFIG"
