@@ -12,8 +12,8 @@ STEAM_USER="$2"
 SERVER_CONFIG="$3"
 STEAMCMD_DIRECTORY="$SERVER_DIRECTORY/steam"
 SERVERDATA_DIRECTORY="$SERVER_DIRECTORY/serverdata"
- BATTLEYE_DIRECTORY="$SERVERDATA_DIRECTORY/battleye/"
- BATTLEYE_CONFIG="$BATTLEYE_DIRECTORY/beserver_x64.cfg"
+BATTLEYE_DIRECTORY="$SERVERDATA_DIRECTORY/battleye/battleye"
+BATTLEYE_CONFIG="$BATTLEYE_DIRECTORY/beserver_x64.cfg"
 STEAMCMD_URL="https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz"
 DAYZ_SERVER_APP_ID="223350"
 
@@ -141,5 +141,5 @@ printf '==================================================\n'
 printf '       DAYZ SERVER INSTALLATION COMPLETE\n'
 printf '==================================================\n'
 printf 'Example test command (run as the server user):\n'
-printf 'cd %q && ./DayZServer -config=serverDZ.cfg -ip=%s -port=%s -profiles=profiles -BEpath=battleye -dologs -adminlog -netlog\n' \
+printf 'cd %q && ./DayZServer -config=serverDZ.cfg -ip=%s -port=%s -profiles=profiles -BEpath=battleye/battleye -dologs -adminlog -netlog\n' \
 	"$SERVERDATA_DIRECTORY" "$SERVER_IP" "$GAME_PORT"

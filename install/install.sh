@@ -571,40 +571,94 @@ printf 'Granted %s passwordless access to scheduler autostart install and uninst
 # Configure UFW firewall with default rules and ask to enable it.
 printf '\n=== Configuring UFW Firewall ===\n'
 
-# Check if UFW is already enabled or configured.
-UFW_STATUS="$(ufw status 2>/dev/null || echo 'inactive')"
+# Check whether UFW is active.
+if ! UFW_STATUS="$(ufw status 2>&1)"; then
+	printf 'Warning: Could not check UFW status; firewall setup cannot be verified: %s\n' "$UFW_STATUS" >&2
+	UFW_STATE="unknown"
+elif grep -Fqx 'Status: inactive' <<< "$UFW_STATUS"; then
+	UFW_STATE="inactive"
+elif grep -Fqx 'Status: active' <<< "$UFW_STATUS"; then
+	UFW_STATE="active"
+else
+	printf 'Warning: Could not determine UFW status; firewall setup cannot be verified.\n' >&2
+	UFW_STATE="unknown"
+fi
 
-# Set default firewall policies for incoming and outgoing traffic.
-if [[ "$UFW_STATUS" == "inactive" ]]; then
+UFW_READY=1
+
+# Set default firewall policies when UFW is inactive.
+if [[ "$UFW_STATE" == "inactive" ]]; then
 	printf 'Configuring UFW default policies:\n'
 	printf '  - Default incoming: DENY (block all incoming connections)\n'
 	printf '  - Default outgoing: ALLOW (allow all outgoing connections)\n'
-	ufw default deny incoming || {
+	if ! ufw default deny incoming; then
 		printf 'Warning: Could not set default deny incoming policy.\n' >&2
-	}
-	ufw default allow outgoing || {
+		UFW_READY=0
+	fi
+	if ! ufw default allow outgoing; then
 		printf 'Warning: Could not set default allow outgoing policy.\n' >&2
-	}
-	printf 'UFW default policies configured.\n'
+		UFW_READY=0
+	fi
+elif [[ "$UFW_STATE" == "active" ]]; then
+	printf 'UFW is already active; keeping its default policies.\n'
 else
-	printf 'UFW is already active; skipping default policy configuration.\n'
+	UFW_READY=0
 fi
 
-# Ask if the user wants to enable UFW now.
-read -r -p 'Do you want to enable UFW firewall now? [y/N] ' UFW_ENABLE_ANSWER
-case "$UFW_ENABLE_ANSWER" in
-	[yY]|[yY][eE][sS])
-		printf 'Enabling UFW firewall...\n'
-		if ufw enable --force >/dev/null 2>&1; then
-			printf 'UFW firewall has been enabled successfully.\n'
-		else
-			printf 'Warning: UFW enable command returned an error. Check UFW status manually with: sudo ufw status\n' >&2
+# Allow the current SSH port and all ports configured by sshd before offering
+# to enable UFW. Fall back to the standard SSH port when none can be detected.
+SSH_PORTS=()
+if [[ -n "${SSH_CONNECTION:-}" ]]; then
+	read -r _ _ _ SSH_CONNECTION_PORT <<< "$SSH_CONNECTION"
+	if [[ "$SSH_CONNECTION_PORT" =~ ^[0-9]{1,5}$ ]] && (( 10#$SSH_CONNECTION_PORT >= 1 && 10#$SSH_CONNECTION_PORT <= 65535 )); then
+		SSH_PORTS+=("$((10#$SSH_CONNECTION_PORT))")
+	fi
+fi
+if command -v sshd >/dev/null 2>&1; then
+	while IFS= read -r SSH_PORT; do
+		if [[ "$SSH_PORT" =~ ^[0-9]{1,5}$ ]] && (( 10#$SSH_PORT >= 1 && 10#$SSH_PORT <= 65535 )); then
+			SSH_PORT="$((10#$SSH_PORT))"
+			if [[ ! " ${SSH_PORTS[*]} " =~ " ${SSH_PORT} " ]]; then
+				SSH_PORTS+=("$SSH_PORT")
+			fi
 		fi
-		;;
-	*)
-		printf 'UFW firewall has NOT been enabled. You can enable it later with: sudo ufw enable\n'
-		;;
-esac
+	done < <(sshd -T 2>/dev/null | awk '$1 == "port" { print $2 }')
+fi
+if (( ${#SSH_PORTS[@]} == 0 )); then
+	SSH_PORTS=(22)
+	printf 'Could not detect a custom SSH port; allowing the standard SSH port 22.\n'
+fi
+
+for SSH_PORT in "${SSH_PORTS[@]}"; do
+	printf 'Allowing SSH on TCP port %s.\n' "$SSH_PORT"
+	if ! ufw allow "$SSH_PORT/tcp"; then
+		printf 'Warning: Could not add the SSH allow rule for TCP port %s.\n' "$SSH_PORT" >&2
+		UFW_READY=0
+	fi
+done
+
+# Ask before enabling UFW only after the defaults and SSH allow rules are ready.
+if [[ "$UFW_STATE" == "active" ]]; then
+	printf 'UFW is already enabled.\n'
+elif (( UFW_READY )); then
+	read -r -p 'Do you want to enable UFW firewall now? [y/N] ' UFW_ENABLE_ANSWER
+	case "$UFW_ENABLE_ANSWER" in
+		[yY]|[yY][eE][sS])
+			printf 'Enabling UFW firewall...\n'
+			if UFW_ENABLE_OUTPUT="$(ufw --force enable 2>&1)" \
+				&& ufw status 2>&1 | grep -Fqx 'Status: active'; then
+				printf 'UFW firewall has been enabled successfully.\n'
+			else
+				printf 'Warning: UFW could not be enabled: %s\nCheck UFW status manually with: sudo ufw status verbose\n' "$UFW_ENABLE_OUTPUT" >&2
+			fi
+			;;
+		*)
+			printf 'UFW firewall has NOT been enabled. You can enable it later with: sudo ufw enable\n'
+			;;
+	esac
+else
+	printf 'UFW was not enabled because its status or required rules could not be verified. Check with: sudo ufw status verbose\n' >&2
+fi
 
 # Copy the project folder into the server folder and assign it to the new user.
 SERVER_CONFIG_NAME="$(basename -- "$INSTALL_CONFIG")"

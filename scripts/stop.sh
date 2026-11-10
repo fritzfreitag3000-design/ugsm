@@ -135,23 +135,28 @@ wait_for_stop() {
 	! "${TMUX_CMD[@]}" has-session -t "=$SERVER_NAME" 2>/dev/null
 }
 
+# Pass "backup" only when the server stopped cleanly after the RCON #shutdown.
+# After Ctrl+C or a kill the data may be inconsistent, so no backup is made.
 server_stopped() {
 	set_server_state stop
 	printf 'Server stopped.\n'
-	
-	# Create backup after successful RCON shutdown
-	printf 'Creating backup...\n'
-	BACKUP_SCRIPT="$PROJECT_DIRECTORY/scripts/backup.sh"
-	if [[ -x "$BACKUP_SCRIPT" ]]; then
-		if [[ "$(id -un)" == "$NEW_USER" ]]; then
-			"$BACKUP_SCRIPT"
+
+	if [[ "${1:-}" == "backup" ]]; then
+		printf 'Creating backup...\n'
+		BACKUP_SCRIPT="$PROJECT_DIRECTORY/scripts/backup.sh"
+		if [[ -x "$BACKUP_SCRIPT" ]]; then
+			if [[ "$(id -un)" == "$NEW_USER" ]]; then
+				"$BACKUP_SCRIPT"
+			else
+				sudo -u "$NEW_USER" "$BACKUP_SCRIPT"
+			fi
 		else
-			sudo -u "$NEW_USER" "$BACKUP_SCRIPT"
+			printf 'Warning: backup.sh not found or not executable: %s\n' "$BACKUP_SCRIPT" >&2
 		fi
 	else
-		printf 'Warning: backup.sh not found or not executable: %s\n' "$BACKUP_SCRIPT" >&2
+		printf 'Server was not stopped via RCON #shutdown; skipping backup.\n'
 	fi
-	
+
 	exit 0
 }
 
@@ -235,7 +240,7 @@ if (( RCON_READY )); then
 
 	if rcon_exec '#shutdown'; then
 		printf 'Sent #shutdown via RCON; waiting up to %s s for the server to stop...\n' "$SHUTDOWN_TIMEOUT"
-		wait_for_stop "$SHUTDOWN_TIMEOUT" && server_stopped
+		wait_for_stop "$SHUTDOWN_TIMEOUT" && server_stopped backup
 		printf 'Server did not stop after #shutdown, sending Ctrl+C.\n' >&2
 	else
 		printf 'Could not send #shutdown via RCON, sending Ctrl+C.\n' >&2
