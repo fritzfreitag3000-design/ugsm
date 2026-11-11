@@ -1,5 +1,15 @@
 # ugsm
 
+## BattlEye
+
+The installer creates `serverdata/battleye/battleye/beserver_x64.cfg` and the
+default start configuration uses `-BEpath=battleye/battleye`. For existing
+installations, update `BEPATH` in the server's copy of `config/start.conf` to
+match. The main installer reuses an existing server project copy, so update its
+`install/install_dayz.sh` before rerunning it. A previous installer could
+create a literal `battleye\battleye` entry in `serverdata`; the installer
+removes it, but will not delete a non-empty directory.
+
 ## Workshop mods
 
 List client-required Workshop IDs in `config/mods.conf` and server-only IDs in

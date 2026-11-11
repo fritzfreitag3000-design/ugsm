@@ -12,8 +12,9 @@ STEAM_USER="$2"
 SERVER_CONFIG="$3"
 STEAMCMD_DIRECTORY="$SERVER_DIRECTORY/steam"
 SERVERDATA_DIRECTORY="$SERVER_DIRECTORY/serverdata"
-BATTLEYE_DIRECTORY="$SERVERDATA_DIRECTORY/battleye"
+BATTLEYE_DIRECTORY="$SERVERDATA_DIRECTORY/battleye/battleye"
 BATTLEYE_CONFIG="$BATTLEYE_DIRECTORY/beserver_x64.cfg"
+LEGACY_BATTLEYE_PATH="$SERVERDATA_DIRECTORY/battleye\\battleye"
 STEAMCMD_URL="https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz"
 DAYZ_SERVER_APP_ID="223350"
 
@@ -126,7 +127,18 @@ cp -- "$DEFAULT_SERVER_CONFIG" "$SERVERDATA_DIRECTORY/serverDZ.cfg"
 printf 'Installed server config at %s/serverDZ.cfg.\n' "$SERVERDATA_DIRECTORY"
 
 # Create the BattlEye RCON settings using the configured port and password.
-mkdir -p -- "$BATTLEYE_DIRECTORY\battleye"
+if [[ -L "$LEGACY_BATTLEYE_PATH" || -f "$LEGACY_BATTLEYE_PATH" ]]; then
+	rm -- "$LEGACY_BATTLEYE_PATH"
+elif [[ -d "$LEGACY_BATTLEYE_PATH" ]]; then
+	if ! rmdir -- "$LEGACY_BATTLEYE_PATH"; then
+		printf 'Could not remove the incorrect BattlEye directory; check its contents: %s\n' "$LEGACY_BATTLEYE_PATH" >&2
+		exit 1
+	fi
+elif [[ -e "$LEGACY_BATTLEYE_PATH" ]]; then
+	printf 'Cannot remove unexpected BattlEye path: %s\n' "$LEGACY_BATTLEYE_PATH" >&2
+	exit 1
+fi
+mkdir -p -- "$BATTLEYE_DIRECTORY"
 umask 077
 printf 'RConPassword %s\nRConPort %s\n' "$RCON_PASS" "$RCON_PORT" > "$BATTLEYE_CONFIG"
 chmod 0600 "$BATTLEYE_CONFIG"
@@ -141,5 +153,5 @@ printf '==================================================\n'
 printf '       DAYZ SERVER INSTALLATION COMPLETE\n'
 printf '==================================================\n'
 printf 'Example test command (run as the server user):\n'
-printf 'cd %q && ./DayZServer -config=serverDZ.cfg -ip=%s -port=%s -profiles=profiles -BEpath=battleye -dologs -adminlog -netlog\n' \
+printf 'cd %q && ./DayZServer -config=serverDZ.cfg -ip=%s -port=%s -profiles=profiles -BEpath=battleye/battleye -dologs -adminlog -netlog\n' \
 	"$SERVERDATA_DIRECTORY" "$SERVER_IP" "$GAME_PORT"
