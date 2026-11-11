@@ -140,7 +140,18 @@ if (( ${#ALL_IDS[@]} == 0 && ! UPDATE_SERVER )); then
 	exit 0
 fi
 
-# Download all listed mods in one SteamCMD session.
+# Determine new and existing mods by comparing with state file
+declare -A EXISTING_IDS=()
+while IFS='|' read -r id _; do
+	[[ -n "$id" && "$id" =~ ^[0-9]+$ ]] && EXISTING_IDS["$id"]=1
+done < "$STATE_FILE"
+
+declare -a NEW_IDS=()
+for id in "${ALL_IDS[@]}"; do
+	[[ -z "${EXISTING_IDS[$id]:-}" ]] && NEW_IDS+=("$id")
+done
+
+# Prepare Steam login arguments
 STEAM_LOGIN_ARGS=(+login)
 if [[ -n "$STEAM_USER" && "${STEAM_USER,,}" != "anonymous" ]]; then
 	printf 'SteamCMD may ask for the account password and Steam Guard code. Enter them at the prompt.\n'
@@ -148,37 +159,108 @@ if [[ -n "$STEAM_USER" && "${STEAM_USER,,}" != "anonymous" ]]; then
 else
 	printf 'SteamCMD will prompt for the login credentials.\n'
 fi
-DOWNLOAD_ARGS=()
-if (( UPDATE_SERVER )); then
-	DOWNLOAD_ARGS+=(+app_update "$DAYZ_SERVER_APP_ID" validate)
-fi
-declare -A DOWNLOAD_IDS=()
-for id in "${ALL_IDS[@]}"; do
-	[[ -n "${DOWNLOAD_IDS[$id]:-}" ]] && continue
-	DOWNLOAD_IDS["$id"]=1
-	DOWNLOAD_ARGS+=(+workshop_download_item "$DAYZ_WORKSHOP_APP_ID" "$id" validate)
-done
+
 STEAM_OUTPUT="$(mktemp)"
 trap 'rm -f -- "$STEAM_OUTPUT"' EXIT
-(
-	cd -- "$STEAMCMD_DIRECTORY"
-	./steamcmd.sh \
-		+force_install_dir "$SERVERDATA_DIRECTORY" \
-		"${STEAM_LOGIN_ARGS[@]}" \
-		"${DOWNLOAD_ARGS[@]}" \
-		+quit 2>&1
-) | tee "$STEAM_OUTPUT"
 
-if (( UPDATE_SERVER )) && ! grep -Fq "Success! App '$DAYZ_SERVER_APP_ID' fully installed." "$STEAM_OUTPUT"; then
-	printf 'SteamCMD did not confirm the DayZ server update; aborting.\n' >&2
-	exit 1
-fi
-for id in "${!DOWNLOAD_IDS[@]}"; do
-	if ! grep -Fq "Success. Downloaded item $id to " "$STEAM_OUTPUT"; then
-		printf 'SteamCMD did not confirm the update of mod %s; aborting.\n' "$id" >&2
+# Function to download with retry and timeout optimization
+download_item_with_retry() {
+	local item_type="$1" app_id="$2" item_id="$3" max_retries=3 attempt=1 exit_code=0
+	
+	while (( attempt <= max_retries )); do
+		printf 'Downloading %s %s (attempt %d/%d)...\n' "$item_type" "$item_id" "$attempt" "$max_retries"
+		> "$STEAM_OUTPUT"
+		
+		(
+			cd -- "$STEAMCMD_DIRECTORY"
+			./steamcmd.sh \
+				+force_install_dir "$SERVERDATA_DIRECTORY" \
+				"${STEAM_LOGIN_ARGS[@]}" \
+				+workshop_download_item "$app_id" "$item_id" validate \
+				+quit 2>&1
+		) | tee "$STEAM_OUTPUT"
+		exit_code=${PIPESTATUS[0]}
+		
+		if grep -Fq "Success. Downloaded item $item_id to " "$STEAM_OUTPUT"; then
+			return 0
+		fi
+		
+		# Check for various error conditions
+		if grep -Eq "(ERROR|Timeout|stalled|Invalid Password|Failed)" "$STEAM_OUTPUT"; then
+			(( attempt < max_retries )) && printf 'Download attempt %d failed for %s %s. Retrying in 10 seconds...\n' "$attempt" "$item_type" "$item_id" >&2
+			sleep 10
+			(( attempt++ ))
+		else
+			printf 'Unknown error downloading %s %s\n' "$item_type" "$item_id" >&2
+			return 1
+		fi
+	done
+	
+	printf 'Failed to download %s %s after %d attempts.\n' "$item_type" "$item_id" "$max_retries" >&2
+	return 1
+}
+
+# Step 1: Update/verify DayZ server if requested
+if (( UPDATE_SERVER )); then
+	printf 'Step 1/3: Updating DayZ server application...\n'
+	(
+		cd -- "$STEAMCMD_DIRECTORY"
+		./steamcmd.sh \
+			+force_install_dir "$SERVERDATA_DIRECTORY" \
+			"${STEAM_LOGIN_ARGS[@]}" \
+			+app_update "$DAYZ_SERVER_APP_ID" validate \
+			+quit 2>&1
+	) | tee "$STEAM_OUTPUT"
+
+	if ! grep -Fq "Success! App '$DAYZ_SERVER_APP_ID' fully installed." "$STEAM_OUTPUT"; then
+		printf 'SteamCMD did not confirm the DayZ server update; aborting.\n' >&2
 		exit 1
 	fi
+	printf 'DayZ server update completed successfully.\n\n'
+fi
+
+# Step 2: Download new mods individually with retry mechanism
+if (( ${#NEW_IDS[@]} > 0 )); then
+	printf 'Step 2/3: Downloading %d new mod(s)...\n' "${#NEW_IDS[@]}"
+	declare -a FAILED_MODS=()
+	
+	for id in "${NEW_IDS[@]}"; do
+		if ! download_item_with_retry "mod" "$DAYZ_WORKSHOP_APP_ID" "$id"; then
+			FAILED_MODS+=("$id")
+		fi
+	done
+	
+	if (( ${#FAILED_MODS[@]} > 0 )); then
+		printf 'Failed to download %d mod(s): %s\n' "${#FAILED_MODS[@]}" "${FAILED_MODS[*]}" >&2
+		exit 1
+	fi
+	printf 'All new mods downloaded successfully.\n\n'
+fi
+
+# Step 3: Update existing mods (if any exist)
+declare -a EXISTING_MODS=()
+for id in "${ALL_IDS[@]}"; do
+	[[ -n "${EXISTING_IDS[$id]:-}" ]] && EXISTING_MODS+=("$id")
 done
+
+if (( ${#EXISTING_MODS[@]} > 0 )); then
+	printf 'Step 3/3: Updating %d existing mod(s)...\n' "${#EXISTING_MODS[@]}"
+	declare -a FAILED_UPDATE_MODS=()
+	
+	for id in "${EXISTING_MODS[@]}"; do
+		if ! download_item_with_retry "mod" "$DAYZ_WORKSHOP_APP_ID" "$id"; then
+			FAILED_UPDATE_MODS+=("$id")
+		fi
+	done
+	
+	if (( ${#FAILED_UPDATE_MODS[@]} > 0 )); then
+		printf 'Failed to update %d mod(s): %s\n' "${#FAILED_UPDATE_MODS[@]}" "${FAILED_UPDATE_MODS[*]}" >&2
+		exit 1
+	fi
+	printf 'All existing mods updated successfully.\n\n'
+else
+	printf 'Step 3/3: No existing mods to update.\n\n'
+fi
 
 # Link each mod into serverdata and copy its keys (any letter case) into keys.
 FAILED=0
