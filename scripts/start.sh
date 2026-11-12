@@ -181,7 +181,7 @@ ARGS=(
 	"-port=$((10#$GAME_PORT))"
 	"-steamQueryPort=$((10#$STEAM_QUERY_PORT))"
 	"-profiles=${PROFILES:-profiles}"
-	"-BEpath=${BEPATH:-battleye/battleye}"
+	"-BEpath=${BEPATH:-battleyercon}"
 )
 for switch in DOLOGS:-dologs ADMINLOG:-adminlog NETLOG:-netlog FREEZECHECK:-freezecheck; do
 	[[ "$(read_setting "$START_CONFIG" "${switch%%:*}")" == "1" ]] && ARGS+=("${switch#*:}")

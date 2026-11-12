@@ -45,7 +45,7 @@ class StartFirewallTest(unittest.TestCase):
         config.mkdir()
         (config / "start.conf").write_text(
             'CONFIG_FILE="serverDZ.cfg"\nPROFILES="profiles"\n'
-            'BEPATH="battleye/battleye"\nCPUCOUNT=""\nLIMITFPS=""\n'
+            'BEPATH="battleyercon"\nCPUCOUNT=""\nLIMITFPS=""\n'
             'EXTRA_PARAMS=""\nHIVE_PATTERN="HiveReady"\n'
         )
         (config / "mods.conf").write_text("")

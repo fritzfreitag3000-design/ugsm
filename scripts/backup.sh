@@ -32,6 +32,7 @@ BACKUP_BASE_DIRECTORY="$SERVER_DIRECTORY/backup"
 MPMISSION_DIRECTORY="$SERVERDATA_DIRECTORY/mpmissions"
 PROFILES_DIRECTORY="$SERVERDATA_DIRECTORY/profiles"
 BATTLEYE_DIRECTORY="$SERVERDATA_DIRECTORY/battleye"
+BATTLEYE_RCON_DIRECTORY="$SERVERDATA_DIRECTORY/battleyercon"
 
 # Validate required directories and files exist
 if [[ ! -d "$SERVER_DIRECTORY" ]]; then
@@ -51,10 +52,35 @@ if [[ ! -d "$PROFILES_DIRECTORY" ]]; then
 	printf 'profiles directory is missing: %s\n' "$PROFILES_DIRECTORY" >&2
 	exit 1
 fi
-if [[ ! -d "$BATTLEYE_DIRECTORY" ]]; then
-	printf 'battleye directory is missing: %s\n' "$BATTLEYE_DIRECTORY" >&2
+if [[ ! -d "$BATTLEYE_DIRECTORY" && ! -d "$BATTLEYE_RCON_DIRECTORY" ]]; then
+	printf 'BattlEye directories are missing: %s and %s\n' "$BATTLEYE_DIRECTORY" "$BATTLEYE_RCON_DIRECTORY" >&2
 	exit 1
 fi
+
+backup_battleye() {
+	local destination="$1" directory
+	for directory in "$BATTLEYE_DIRECTORY" "$BATTLEYE_RCON_DIRECTORY"; do
+		if [[ -d "$directory" ]]; then
+			cp -a -- "$directory" "$destination/"
+		fi
+	done
+}
+
+restore_battleye() {
+	local backup="$1" name
+	if [[ ! -d "$backup/battleye" && ! -d "$backup/battleyercon" ]]; then
+		printf 'Backup contains no BattlEye directory: %s\n' "$backup" >&2
+		return 1
+	fi
+	for name in battleye battleyercon; do
+		if [[ -d "$backup/$name" ]]; then
+			rm -rf -- "$SERVERDATA_DIRECTORY/$name"
+			cp -a -- "$backup/$name" "$SERVERDATA_DIRECTORY/"
+		else
+			printf 'Backup has no %s directory; leaving the current directory unchanged.\n' "$name" >&2
+		fi
+	done
+}
 
 # Read the active mission template from serverDZ.cfg
 read_active_mission() {
@@ -123,7 +149,7 @@ create_backup() {
 	# Copy the active mission folder, profiles directory, server config, and battleye config
 	cp -a -- "$MISSION_FOLDER" "$BACKUP_FOLDER/"
 	cp -a -- "$PROFILES_DIRECTORY" "$BACKUP_FOLDER/"
-	cp -a -- "$BATTLEYE_DIRECTORY" "$BACKUP_FOLDER/"
+	backup_battleye "$BACKUP_FOLDER"
 	cp -- "$SERVER_CONFIG_FILE" "$BACKUP_FOLDER/"
 
 	# Compress the backup
@@ -164,7 +190,7 @@ auto_recover() {
 
 	cp -a -- "$MISSION_FOLDER" "$ERROR_BACKUP_FOLDER/"
 	cp -a -- "$PROFILES_DIRECTORY" "$ERROR_BACKUP_FOLDER/"
-	cp -a -- "$BATTLEYE_DIRECTORY" "$ERROR_BACKUP_FOLDER/"
+	backup_battleye "$ERROR_BACKUP_FOLDER"
 	cp -- "$SERVER_CONFIG_FILE" "$ERROR_BACKUP_FOLDER/"
 
 	ERROR_BACKUP_FILE="$BACKUP_BASE_DIRECTORY/ERROR_$ERROR_BACKUP_TIMESTAMP.zip"
@@ -197,6 +223,9 @@ auto_recover() {
 		exit 1
 	fi
 
+	printf 'Restoring BattlEye config...\n'
+	restore_battleye "$BACKUP_FOLDER_NAME"
+
 	# Restore the data
 	printf 'Restoring mission folder...\n'
 	rm -rf -- "$MISSION_FOLDER"
@@ -205,10 +234,6 @@ auto_recover() {
 	printf 'Restoring profiles folder...\n'
 	rm -rf -- "$PROFILES_DIRECTORY"
 	cp -a -- "$BACKUP_FOLDER_NAME/profiles" "$SERVERDATA_DIRECTORY/"
-
-	printf 'Restoring battleye config...\n'
-	rm -rf -- "$BATTLEYE_DIRECTORY"
-	cp -a -- "$BACKUP_FOLDER_NAME/battleye" "$SERVERDATA_DIRECTORY/"
 
 	printf 'Restoring serverDZ.cfg...\n'
 	cp -- "$BACKUP_FOLDER_NAME/serverDZ.cfg" "$SERVER_CONFIG_FILE"
@@ -271,7 +296,7 @@ recover() {
 
 	cp -a -- "$MISSION_FOLDER" "$ERROR_BACKUP_FOLDER/"
 	cp -a -- "$PROFILES_DIRECTORY" "$ERROR_BACKUP_FOLDER/"
-	cp -a -- "$BATTLEYE_DIRECTORY" "$ERROR_BACKUP_FOLDER/"
+	backup_battleye "$ERROR_BACKUP_FOLDER"
 	cp -- "$SERVER_CONFIG_FILE" "$ERROR_BACKUP_FOLDER/"
 
 	ERROR_BACKUP_FILE="$BACKUP_BASE_DIRECTORY/ERROR_$ERROR_BACKUP_TIMESTAMP.zip"
@@ -295,6 +320,9 @@ recover() {
 		exit 1
 	fi
 
+	printf 'Restoring BattlEye config...\n'
+	restore_battleye "$BACKUP_FOLDER_NAME"
+
 	# Restore the data
 	printf 'Restoring mission folder...\n'
 	rm -rf -- "$MISSION_FOLDER"
@@ -303,10 +331,6 @@ recover() {
 	printf 'Restoring profiles folder...\n'
 	rm -rf -- "$PROFILES_DIRECTORY"
 	cp -a -- "$BACKUP_FOLDER_NAME/profiles" "$SERVERDATA_DIRECTORY/"
-
-	printf 'Restoring battleye config...\n'
-	rm -rf -- "$BATTLEYE_DIRECTORY"
-	cp -a -- "$BACKUP_FOLDER_NAME/battleye" "$SERVERDATA_DIRECTORY/"
 
 	printf 'Restoring serverDZ.cfg...\n'
 	cp -- "$BACKUP_FOLDER_NAME/serverDZ.cfg" "$SERVER_CONFIG_FILE"

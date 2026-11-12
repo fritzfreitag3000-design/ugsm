@@ -1,14 +1,23 @@
 # ugsm
 
+## Server configuration
+
+The DayZ installer copies `config/default_serverDZ.cfg` to
+`serverdata/serverDZ.cfg`, replacing any existing server configuration each
+time it runs. Back up custom settings before rerunning the installer.
+
 ## BattlEye
 
-The installer creates `serverdata/battleye/battleye/beserver_x64.cfg` and the
-default start configuration uses `-BEpath=battleye/battleye`. For existing
+The installer creates `serverdata/battleyercon/beserver_x64.cfg` and the
+default start configuration uses `-BEpath=battleyercon`. For existing
 installations, update `BEPATH` in the server's copy of `config/start.conf` to
 match. The main installer reuses an existing server project copy, so update its
-`install/install_dayz.sh` before rerunning it. A previous installer could
-create a literal `battleye\battleye` entry in `serverdata`; the installer
-removes it, but will not delete a non-empty directory.
+`install/install_dayz.sh` before rerunning it. Existing `battleye` directories
+are left in place. A previous installer could create a literal
+`battleye\battleye` entry in `serverdata`; the installer removes it, but will
+not delete a non-empty directory.
+Backups include both `battleyercon` and `battleye` when present. Restoring an
+older backup without `battleyercon` leaves the current directory unchanged.
 
 ## Workshop mods
 

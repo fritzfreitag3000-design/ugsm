@@ -29,14 +29,32 @@ class BattlEyeInstallTest(unittest.TestCase):
         )
         self.legacy = self.data / "battleye\\battleye"
 
-    def install(self):
+    def install(self, script=ROOT / "install/install_dayz.sh"):
         return subprocess.run(
-            ["bash", str(ROOT / "install/install_dayz.sh"), str(self.server), "", str(self.config)],
+            ["bash", str(script), str(self.server), "", str(self.config)],
             text=True,
             capture_output=True,
         )
 
-    def test_installs_nested_config_and_removes_legacy_entry(self):
+    def test_installs_template_over_existing_server_config(self):
+        config = self.data / "serverDZ.cfg"
+        config.write_text("previous configuration")
+        result = self.install()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(config.read_bytes(), (ROOT / "config/default_serverDZ.cfg").read_bytes())
+
+    def test_missing_template_fails_without_overwriting_server_config(self):
+        script = self.server / "ugsm/install/install_dayz.sh"
+        script.parent.mkdir(parents=True)
+        shutil.copy(ROOT / "install/install_dayz.sh", script)
+        config = self.data / "serverDZ.cfg"
+        config.write_text("previous configuration")
+        result = self.install(script)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Default server config was not found", result.stderr)
+        self.assertEqual(config.read_text(), "previous configuration")
+
+    def test_installs_rcon_config_and_removes_legacy_entry(self):
         for legacy_type in ("absent", "directory", "file"):
             with self.subTest(legacy_type=legacy_type):
                 if legacy_type == "directory":
@@ -45,11 +63,12 @@ class BattlEyeInstallTest(unittest.TestCase):
                     self.legacy.touch()
                 result = self.install()
                 self.assertEqual(result.returncode, 0, result.stderr)
-                config = self.data / "battleye/battleye/beserver_x64.cfg"
+                config = self.data / "battleyercon/beserver_x64.cfg"
                 self.assertEqual(config.read_text(), "RConPassword example\nRConPort 2305\n")
                 self.assertEqual(stat.S_IMODE(config.stat().st_mode), 0o600)
                 self.assertFalse(self.legacy.exists())
-                self.assertIn("-BEpath=battleye/battleye", result.stdout)
+                self.assertFalse((self.data / "battleye").exists())
+                self.assertIn("-BEpath=battleyercon", result.stdout)
 
     def test_nonempty_legacy_directory_is_preserved(self):
         self.legacy.mkdir()
@@ -59,6 +78,15 @@ class BattlEyeInstallTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("check its contents", result.stderr)
         self.assertEqual(contents.read_text(), "data")
+
+    def test_existing_battleye_directory_is_preserved(self):
+        old_config = self.data / "battleye/battleye/beserver_x64.cfg"
+        old_config.parent.mkdir(parents=True)
+        old_config.write_text("old configuration")
+        result = self.install()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(old_config.read_text(), "old configuration")
+        self.assertTrue((self.data / "battleyercon/beserver_x64.cfg").is_file())
 
     def test_default_start_command_uses_installed_config_directory(self):
         project = self.server / "ugsm"
@@ -89,7 +117,17 @@ class BattlEyeInstallTest(unittest.TestCase):
             env=env,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("-BEpath=battleye/battleye", result.stdout)
+        self.assertIn("-BEpath=battleyercon", result.stdout)
+        start_config = project / "config/start.conf"
+        start_config.write_text(start_config.read_text().replace('BEPATH="battleyercon"', 'BEPATH=""'))
+        result = subprocess.run(
+            ["bash", str(project / "scripts/start.sh"), "--print"],
+            text=True,
+            capture_output=True,
+            env=env,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("-BEpath=battleyercon", result.stdout)
 
 
 if __name__ == "__main__":
