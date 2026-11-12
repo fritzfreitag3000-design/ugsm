@@ -75,6 +75,10 @@ To start the scheduler automatically after a reboot, open the dashboard's
 Scheduler menu and choose **Enable scheduler autostart**. The systemd service
 starts the tmux scheduler at boot.
 
+Use **Enable auto-recovery** or **Disable auto-recovery** in the Scheduler menu
+to change `AUTO_RECOVER` in `scheduler.conf`. A running scheduler picks up the
+change on its next minute check.
+
 Mouse scrolling is enabled in the dashboard. Click the menu or scheduler pane
 first, then scroll to enter tmux scrollback. Press `q` to return to the live
 view; click the menu to enter commands again. You can also use `Ctrl+b`, then

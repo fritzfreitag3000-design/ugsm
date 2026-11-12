@@ -36,6 +36,42 @@ read_config_setting() {
 	}' "$1"
 }
 
+set_auto_recover() {
+	local value="$1" config_file="$PROJECT_DIRECTORY/config/scheduler.conf" temp_file
+	if [[ ! -f "$config_file" || ! -r "$config_file" ]]; then
+		printf 'Config file is missing or unreadable: %s\n' "$config_file" >&2
+		return 1
+	fi
+	if ! temp_file="$(mktemp "${config_file}.XXXXXX")"; then
+		printf 'Could not create a temporary file for %s.\n' "$config_file" >&2
+		return 1
+	fi
+	if ! awk -v value="$value" '
+	{
+		separator = index($0, "=")
+		name = substr($0, 1, separator - 1)
+		gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
+		if (!written && separator && name == "AUTO_RECOVER") {
+			comment = ""
+			rest = substr($0, separator + 1)
+			if (match(rest, /[[:space:]]+#.*/)) comment = substr(rest, RSTART)
+			print substr($0, 1, separator) value comment
+			written = 1
+			next
+		}
+		print
+	}
+	END {
+		if (!written) print "AUTO_RECOVER=" value
+	}' "$config_file" > "$temp_file" ||
+		! chmod --reference="$config_file" "$temp_file" ||
+		! mv -- "$temp_file" "$config_file"; then
+		rm -f -- "$temp_file"
+		printf 'Could not update auto-recovery in %s.\n' "$config_file" >&2
+		return 1
+	fi
+}
+
 # Show scheduler status, the recovery setting, and the systemd autostart state.
 show_scheduler_status() {
 	local scheduler_output recovery autostart service_name load_state
@@ -277,6 +313,8 @@ scheduler_menu() {
 		printf '  5  Disable scheduler autostart\n'
 		printf '  6  Open scheduler console\n'
 		printf '  7  Edit scheduler.conf\n'
+		printf '  8  Enable auto-recovery\n'
+		printf '  9  Disable auto-recovery\n'
 		printf '  0  Back\n'
 		if [[ -n "$message" ]]; then
 			printf '\n%s\n' "$message"
@@ -319,8 +357,23 @@ scheduler_menu() {
 				fi
 				continue
 				;;
+			8|9)
+				if [[ "$choice" == "8" ]]; then
+					action=1
+				else
+					action=0
+				fi
+				if message="$(set_auto_recover "$action" 2>&1)"; then
+					if [[ "$action" == "1" ]]; then
+						message="Auto-recovery enabled."
+					else
+						message="Auto-recovery disabled."
+					fi
+				fi
+				continue
+				;;
 			0) return ;;
-			*) message="Invalid option. Enter a number from 0 to 7."; continue ;;
+			*) message="Invalid option. Enter a number from 0 to 9."; continue ;;
 		esac
 		clear_menu
 		if ! bash "$SCRIPT_DIRECTORY/$command" "$action"; then
