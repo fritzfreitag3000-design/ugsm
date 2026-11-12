@@ -5,8 +5,9 @@ set -euo pipefail
 # IP and ports come from install/<server name>_server.conf, mods from config/mods.conf
 # and config/servermod.conf, all other parameters from config/start.conf.
 # After the start the console and RPT log are watched until the Hive is initialized,
-# then UFW allow rules are added (limited by STARTUP_TIMEOUT in the server conf).
-# These rules only filter traffic when UFW is active and its other rules and policy permit it.
+# then UFW allow rules are attempted (limited by STARTUP_TIMEOUT in the server conf).
+# Firewall errors are reported but do not cancel startup. UFW rules only filter
+# traffic when UFW is active and its other rules and policy permit it.
 # Usage: start.sh [--print]
 #   --print  only show the command; otherwise show it and start the server
 
@@ -271,29 +272,33 @@ printf '\n'
 
 # The installer only allows exactly these sudo commands: ufw allow|delete allow <port>/udp.
 UFW_BIN="/usr/sbin/ufw"
+UFW_AVAILABLE=1
 if [[ ! -x "$UFW_BIN" ]]; then
-	printf 'ufw was not found at %s.\n' "$UFW_BIN" >&2
-	exit 1
+	UFW_AVAILABLE=0
+	printf 'Warning: ufw was not found at %s; startup will continue without managing firewall rules.\n' "$UFW_BIN" >&2
 fi
 UFW_CMD=("$UFW_BIN")
 (( EUID == 0 )) || UFW_CMD=(sudo -n "$UFW_BIN")
 
-if ! UFW_STATUS="$("${UFW_CMD[@]}" status verbose 2>&1)"; then
-	printf 'Warning: Could not check UFW status; startup port blocking cannot be verified: %s\n' "$UFW_STATUS" >&2
-elif grep -Fqx 'Status: inactive' <<< "$UFW_STATUS"; then
-	printf 'Warning: UFW is inactive. UDP ports %s, %s and %s will NOT be blocked during startup.\n' \
-		"$GAME_PORT" "$RCON_PORT" "$STEAM_QUERY_PORT" >&2
-elif grep -Fqx 'Status: active' <<< "$UFW_STATUS"; then
-	printf 'Warning: Removing allow rules does not guarantee startup port blocking; check the UFW policy and other rules.\n' >&2
-else
-	printf 'Warning: Unrecognized UFW status; startup port blocking cannot be verified.\n' >&2
+if (( UFW_AVAILABLE )); then
+	if ! UFW_STATUS="$("${UFW_CMD[@]}" status verbose 2>&1)"; then
+		printf 'Warning: Could not check UFW status; startup port blocking cannot be verified: %s\n' "$UFW_STATUS" >&2
+	elif grep -Fqx 'Status: inactive' <<< "$UFW_STATUS"; then
+		printf 'Warning: UFW is inactive. UDP ports %s, %s and %s will NOT be blocked during startup.\n' \
+			"$GAME_PORT" "$RCON_PORT" "$STEAM_QUERY_PORT" >&2
+	elif grep -Fqx 'Status: active' <<< "$UFW_STATUS"; then
+		printf 'Warning: Removing allow rules does not guarantee startup port blocking; check the UFW policy and other rules.\n' >&2
+	else
+		printf 'Warning: Unrecognized UFW status; startup port blocking cannot be verified.\n' >&2
+	fi
 fi
 
 # Removing allow rules only blocks traffic when other UFW rules and policy also deny it.
 for port in "$((10#$GAME_PORT))" "$((10#$RCON_PORT))" "$((10#$STEAM_QUERY_PORT))"; do
+	(( UFW_AVAILABLE )) || break
 	if ! UFW_OUTPUT="$("${UFW_CMD[@]}" delete allow "$port/udp" 2>&1)"; then
-		printf '%s\nCould not remove the UFW allow rule for port %s.\n' "$UFW_OUTPUT" "$port" >&2
-		exit 1
+		printf 'Warning: Could not remove the UFW allow rule for port %s; it may remain reachable during startup: %s\n' \
+			"$port" "$UFW_OUTPUT" >&2
 	fi
 done
 
@@ -338,9 +343,24 @@ if (( 10#$PORT_OPEN_DELAY > 0 )); then
 	printf 'Hive initialized. Adding UFW allow rules in %s s...\n' "$PORT_OPEN_DELAY"
 	sleep "$((10#$PORT_OPEN_DELAY))"
 fi
-for port in "$((10#$GAME_PORT))" "$((10#$RCON_PORT))" "$((10#$STEAM_QUERY_PORT))"; do
-	"${UFW_CMD[@]}" allow "$port/udp" || { printf 'Could not add the UFW allow rule for port %s.\n' "$port" >&2; exit 1; }
-done
+UFW_ALLOW_FAILED=0
+if (( UFW_AVAILABLE )); then
+	for port in "$((10#$GAME_PORT))" "$((10#$RCON_PORT))" "$((10#$STEAM_QUERY_PORT))"; do
+		if ! UFW_OUTPUT="$("${UFW_CMD[@]}" allow "$port/udp" 2>&1)"; then
+			UFW_ALLOW_FAILED=1
+			printf 'Warning: Could not add the UFW allow rule for port %s; the server will keep running, but the port may be unreachable: %s\n' \
+				"$port" "$UFW_OUTPUT" >&2
+		fi
+	done
+else
+	UFW_ALLOW_FAILED=1
+	printf 'Warning: UFW is unavailable; UDP ports %s, %s and %s were not opened. The server will keep running.\n' \
+		"$GAME_PORT" "$RCON_PORT" "$STEAM_QUERY_PORT" >&2
+fi
 set_server_state running
-printf 'UFW allow rules added for UDP ports %s, %s and %s (external reachability not verified).\n' \
-	"$GAME_PORT" "$RCON_PORT" "$STEAM_QUERY_PORT"
+if (( UFW_ALLOW_FAILED )); then
+	printf 'Server is running, but one or more UFW allow rules could not be added; check the warnings above.\n' >&2
+else
+	printf 'UFW allow rules added for UDP ports %s, %s and %s (external reachability not verified).\n' \
+		"$GAME_PORT" "$RCON_PORT" "$STEAM_QUERY_PORT"
+fi
