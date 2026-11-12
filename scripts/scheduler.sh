@@ -91,7 +91,7 @@ run_maintenance() {
 	for command in "${commands[@]}"; do
 		printf '[%s] ▶ %s\n' "$(date +%H:%M:%S)" "$command"
 		rc=0
-		bash -c "$command" </dev/null || rc=$?
+		( cd -- "$SCRIPT_DIRECTORY" && bash -c "$command" ) </dev/null || rc=$?
 		if (( rc == 0 )); then
 			printf '[%s] ✓ done (exit 0): %s\n' "$(date +%H:%M:%S)" "$command"
 		else

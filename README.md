@@ -90,13 +90,17 @@ The installer grants the configured Linux user passwordless access to
 `systemctl reboot` only. Run `scripts/reboot.sh` as that user to reboot the
 entire Linux host, including all other services. The script does not stop the
 DayZ server first. For scheduled maintenance, the scheduler stops it before
-running commands: set `MAINTENANCE_START_SERVER=0` and add, for example,
-`MAINTENANCE_COMMAND="bash $HOME/dayzserver/ugsm/scripts/reboot.sh"` to
-`config/scheduler.conf`, replacing the path for your installation. Enable
+running commands: the default `config/scheduler.conf` sets
+`MAINTENANCE_START_SERVER=0` and runs `MAINTENANCE_COMMAND="./reboot.sh"` at
+the configured maintenance time. Maintenance
+commands run in the installation's `scripts` directory, regardless of where
+the scheduler was started. Existing commands using relative paths may need
+updating. Enable
 scheduler autostart and auto-recovery if the DayZ server should start again
 after boot. If the reboot command fails, the scheduler leaves the DayZ server
 stopped when `MAINTENANCE_START_SERVER=0`.
 
 On an existing installation, rerun the updated installer to grant the rule.
 It reuses the existing project copy without updating its scripts, so also copy
-the updated `scripts/reboot.sh` into that installation.
+the updated `scripts/reboot.sh` and `scripts/scheduler.sh` into that
+installation, then restart the scheduler.
