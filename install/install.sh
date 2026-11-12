@@ -521,6 +521,7 @@ printf '%s\n' \
 	'' \
 	'[Service]' \
 	'Type=oneshot' \
+	'RemainAfterExit=yes' \
 	"User=$SERVER_USER" \
 	"$EXEC_START" \
 	'' \

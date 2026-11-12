@@ -71,6 +71,10 @@ If an older or incomplete dashboard exists, exit any menu action and close
 that dashboard using the command reported by the script before starting it
 again.
 
+To start the scheduler automatically after a reboot, open the dashboard's
+Scheduler menu and choose **Enable scheduler autostart**. The systemd service
+starts the tmux scheduler at boot.
+
 Mouse scrolling is enabled in the dashboard. Click the menu or scheduler pane
 first, then scroll to enter tmux scrollback. Press `q` to return to the live
 view; click the menu to enter commands again. You can also use `Ctrl+b`, then
