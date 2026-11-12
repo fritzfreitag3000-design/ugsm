@@ -114,35 +114,35 @@ printf 'Installing DayZ server files into %s.\n' "$SERVERDATA_DIRECTORY"
 printf 'DayZ server files are ready in %s.\n' "$SERVERDATA_DIRECTORY"
 
 # Find the default server configuration in the copied project folder.
-SCRIPT_DIRECTORY="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIRECTORY="$(cd -- "$SCRIPT_DIRECTORY/.." && pwd)"
-DEFAULT_SERVER_CONFIG="$PROJECT_DIRECTORY/config/default_serverDZ.cfg"
+# SCRIPT_DIRECTORY="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# PROJECT_DIRECTORY="$(cd -- "$SCRIPT_DIRECTORY/.." && pwd)"
+# DEFAULT_SERVER_CONFIG="$PROJECT_DIRECTORY/config/default_serverDZ.cfg"
 
 # Replace serverDZ.cfg with the project template.
-if [[ ! -f "$DEFAULT_SERVER_CONFIG" ]]; then
-	printf 'Default server config was not found: %s\n' "$DEFAULT_SERVER_CONFIG" >&2
-	exit 1
-fi
-cp -- "$DEFAULT_SERVER_CONFIG" "$SERVERDATA_DIRECTORY/serverDZ.cfg"
-printf 'Installed server config at %s/serverDZ.cfg.\n' "$SERVERDATA_DIRECTORY"
+# if [[ ! -f "$DEFAULT_SERVER_CONFIG" ]]; then
+# 	printf 'Default server config was not found: %s\n' "$DEFAULT_SERVER_CONFIG" >&2
+# 	exit 1
+# fi
+# cp -- "$DEFAULT_SERVER_CONFIG" "$SERVERDATA_DIRECTORY/serverDZ.cfg"
+# printf 'Installed server config at %s/serverDZ.cfg.\n' "$SERVERDATA_DIRECTORY"
 
 # Create the BattlEye RCON settings using the configured port and password.
-if [[ -L "$LEGACY_BATTLEYE_PATH" || -f "$LEGACY_BATTLEYE_PATH" ]]; then
-	rm -- "$LEGACY_BATTLEYE_PATH"
-elif [[ -d "$LEGACY_BATTLEYE_PATH" ]]; then
-	if ! rmdir -- "$LEGACY_BATTLEYE_PATH"; then
-		printf 'Could not remove the incorrect BattlEye directory; check its contents: %s\n' "$LEGACY_BATTLEYE_PATH" >&2
-		exit 1
-	fi
-elif [[ -e "$LEGACY_BATTLEYE_PATH" ]]; then
-	printf 'Cannot remove unexpected BattlEye path: %s\n' "$LEGACY_BATTLEYE_PATH" >&2
-	exit 1
-fi
-mkdir -p -- "$BATTLEYE_DIRECTORY"
-umask 077
-printf 'RConPassword %s\nRConPort %s\n' "$RCON_PASS" "$RCON_PORT" > "$BATTLEYE_CONFIG"
-chmod 0600 "$BATTLEYE_CONFIG"
-printf 'Created BattlEye config at %s.\n' "$BATTLEYE_CONFIG"
+# if [[ -L "$LEGACY_BATTLEYE_PATH" || -f "$LEGACY_BATTLEYE_PATH" ]]; then
+# 	rm -- "$LEGACY_BATTLEYE_PATH"
+# elif [[ -d "$LEGACY_BATTLEYE_PATH" ]]; then
+# 	if ! rmdir -- "$LEGACY_BATTLEYE_PATH"; then
+# 		printf 'Could not remove the incorrect BattlEye directory; check its contents: %s\n' "$LEGACY_BATTLEYE_PATH" >&2
+# 		exit 1
+# 	fi
+# elif [[ -e "$LEGACY_BATTLEYE_PATH" ]]; then
+# 	printf 'Cannot remove unexpected BattlEye path: %s\n' "$LEGACY_BATTLEYE_PATH" >&2
+# 	exit 1
+# fi
+# mkdir -p -- "$BATTLEYE_DIRECTORY"
+# umask 077
+# printf 'RConPassword %s\nRConPort %s\n' "$RCON_PASS" "$RCON_PORT" > "$BATTLEYE_CONFIG"
+# chmod 0600 "$BATTLEYE_CONFIG"
+# printf 'Created BattlEye config at %s.\n' "$BATTLEYE_CONFIG"
 
 # Prepare the profile folder used by the example start command.
 mkdir -p -- "$SERVERDATA_DIRECTORY/profiles"
