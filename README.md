@@ -83,3 +83,20 @@ Mouse scrolling is enabled in the dashboard. Click the menu or scheduler pane
 first, then scroll to enter tmux scrollback. Press `q` to return to the live
 view; click the menu to enter commands again. You can also use `Ctrl+b`, then
 `[` to enter scrollback in the selected pane.
+
+## Host reboot
+
+The installer grants the configured Linux user passwordless access to
+`systemctl reboot` only. Run `scripts/reboot.sh` as that user to reboot the
+entire Linux host, including all other services. The script does not stop the
+DayZ server first. For scheduled maintenance, the scheduler stops it before
+running commands: set `MAINTENANCE_START_SERVER=0` and add, for example,
+`MAINTENANCE_COMMAND="bash $HOME/dayzserver/ugsm/scripts/reboot.sh"` to
+`config/scheduler.conf`, replacing the path for your installation. Enable
+scheduler autostart and auto-recovery if the DayZ server should start again
+after boot. If the reboot command fails, the scheduler leaves the DayZ server
+stopped when `MAINTENANCE_START_SERVER=0`.
+
+On an existing installation, rerun the updated installer to grant the rule.
+It reuses the existing project copy without updating its scripts, so also copy
+the updated `scripts/reboot.sh` into that installation.

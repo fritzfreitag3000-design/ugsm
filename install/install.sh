@@ -419,6 +419,37 @@ if [[ "$SUDOERS_ALREADY_INSTALLED" -eq 0 ]]; then
 	printf 'Granted %s permission to open and close only the configured UDP ports with sudo ufw.\n' "$NEW_USER"
 fi
 
+# Allow this user to reboot the host without granting other systemctl actions.
+REBOOT_SUDOERS="/etc/sudoers.d/ugsm-${NEW_USER}-reboot"
+SYSTEMCTL_BIN="/usr/bin/systemctl"
+if [[ ! -x "$SYSTEMCTL_BIN" ]]; then
+	printf 'systemctl was not found at %s.\n' "$SYSTEMCTL_BIN" >&2
+	exit 1
+fi
+TEMP_REBOOT_SUDOERS="$(mktemp "/etc/sudoers.d/.ugsm-${NEW_USER}-reboot.XXXXXX")"
+trap 'rm -f -- "$TEMP_REBOOT_SUDOERS"' EXIT
+printf '%s ALL=(root) NOPASSWD: %s reboot\n' "$NEW_USER" "$SYSTEMCTL_BIN" > "$TEMP_REBOOT_SUDOERS"
+chmod 0440 "$TEMP_REBOOT_SUDOERS"
+if ! visudo -cf "$TEMP_REBOOT_SUDOERS"; then
+	printf 'Generated reboot sudoers rules are invalid.\n' >&2
+	exit 1
+fi
+if [[ -e "$REBOOT_SUDOERS" || -L "$REBOOT_SUDOERS" ]]; then
+	if [[ ! -f "$REBOOT_SUDOERS" || -L "$REBOOT_SUDOERS" ]] || [[ "$(stat -c '%u:%a' "$REBOOT_SUDOERS")" != '0:440' ]] || ! cmp -s -- "$TEMP_REBOOT_SUDOERS" "$REBOOT_SUDOERS"; then
+		printf 'Existing reboot sudoers rules do not match: %s\n' "$REBOOT_SUDOERS" >&2
+		exit 1
+	fi
+	printf 'Matching reboot sudoers rules already exist; skipping.\n'
+else
+	if ! ln -- "$TEMP_REBOOT_SUDOERS" "$REBOOT_SUDOERS"; then
+		printf 'Could not install reboot sudoers rules for %s.\n' "$NEW_USER" >&2
+		exit 1
+	fi
+	printf 'Granted %s passwordless permission to reboot the host.\n' "$NEW_USER"
+fi
+rm -- "$TEMP_REBOOT_SUDOERS"
+trap - EXIT
+
 UGSM_COPY="$SERVER_DIRECTORY/ugsm"
 
 # Keep the privileged helper in root-owned directories outside the user's home.
