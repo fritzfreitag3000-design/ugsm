@@ -72,6 +72,15 @@ restore_battleye() {
 		printf 'Backup contains no BattlEye directory: %s\n' "$backup" >&2
 		return 1
 	fi
+	if [[ -d "$backup/battleye" && ( -e "$backup/battleye/battleyercon" || -L "$backup/battleye/battleyercon" ) ]] \
+		&& [[ ! -d "$backup/battleye/battleyercon" || -L "$backup/battleye/battleyercon" ]]; then
+		printf 'Invalid BattlEye RCON directory in backup: %s\n' "$backup/battleye/battleyercon" >&2
+		return 1
+	fi
+	if [[ -d "$backup/battleye" && ! -e "$backup/battleye/battleyercon" && ! -L "$backup/battleye/battleyercon" && -d "$BATTLEYE_DIRECTORY/battleyercon" ]]; then
+		printf 'Backup has no battleye/battleyercon directory; leaving the current directory unchanged.\n' >&2
+		cp -a -- "$BATTLEYE_DIRECTORY/battleyercon" "$backup/battleye/"
+	fi
 	for name in battleye battleyercon; do
 		if [[ -d "$backup/$name" ]]; then
 			rm -rf -- "$SERVERDATA_DIRECTORY/$name"

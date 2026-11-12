@@ -63,11 +63,11 @@ class BattlEyeInstallTest(unittest.TestCase):
                     self.legacy.touch()
                 result = self.install()
                 self.assertEqual(result.returncode, 0, result.stderr)
-                config = self.data / "battleyercon/beserver_x64.cfg"
+                config = self.data / "battleye/battleyercon/beserver_x64.cfg"
                 self.assertEqual(config.read_text(), "RConPassword example\nRConPort 2305\n")
                 self.assertEqual(stat.S_IMODE(config.stat().st_mode), 0o600)
                 self.assertFalse(self.legacy.exists())
-                self.assertFalse((self.data / "battleye").exists())
+                self.assertFalse((self.data / "battleyercon").exists())
                 self.assertIn("-BEpath=battleyercon", result.stdout)
 
     def test_nonempty_legacy_directory_is_preserved(self):
@@ -86,7 +86,7 @@ class BattlEyeInstallTest(unittest.TestCase):
         result = self.install()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(old_config.read_text(), "old configuration")
-        self.assertTrue((self.data / "battleyercon/beserver_x64.cfg").is_file())
+        self.assertTrue((self.data / "battleye/battleyercon/beserver_x64.cfg").is_file())
 
     def test_default_start_command_uses_installed_config_directory(self):
         project = self.server / "ugsm"

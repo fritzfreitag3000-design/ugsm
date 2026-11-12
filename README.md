@@ -6,9 +6,27 @@ The DayZ installer copies `config/default_serverDZ.cfg` to
 `serverdata/serverDZ.cfg`, replacing any existing server configuration each
 time it runs. Back up custom settings before rerunning the installer.
 
+## FTPS access
+
+Run `sudo bash install/install_vsftpd.sh` and select a server configuration.
+The existing Linux account and password are used; no password is changed. The
+script replaces the global vsftpd configuration after confirmation and saves
+the previous file under `/etc/vsftpd.conf.ugsm-backup.*`. It restricts logins
+to UGSM accounts added with this script. Existing FTP access may be affected.
+
+Connect using explicit FTPS on TCP port 21, verify the displayed SHA-256
+fingerprint of the self-signed certificate, and open the `home` folder. This
+is the user's real home directory, bind-mounted inside a root-owned FTP jail.
+Absolute symlinks or symlinks pointing outside this jail will not work through
+FTP. The script does not change firewall or router rules: permit TCP 21 and
+50000-50100, and forward those ports when behind NAT. Enter the public IPv4
+address when prompted if the server is behind NAT.
+On subsequent runs, Enter retains the existing passive address; enter `-` to
+clear it.
+
 ## BattlEye
 
-The installer creates `serverdata/battleyercon/beserver_x64.cfg` and the
+The installer creates `serverdata/battleye/battleyercon/beserver_x64.cfg` and the
 default start configuration uses `-BEpath=battleyercon`. For existing
 installations, update `BEPATH` in the server's copy of `config/start.conf` to
 match. The main installer reuses an existing server project copy, so update its
@@ -16,8 +34,9 @@ match. The main installer reuses an existing server project copy, so update its
 are left in place. A previous installer could create a literal
 `battleye\battleye` entry in `serverdata`; the installer removes it, but will
 not delete a non-empty directory.
-Backups include both `battleyercon` and `battleye` when present. Restoring an
-older backup without `battleyercon` leaves the current directory unchanged.
+Backups include `battleye` and the former top-level `battleyercon` when
+present. Restoring an older backup without `battleye/battleyercon` preserves
+the current RCON directory.
 
 ## Workshop mods
 
