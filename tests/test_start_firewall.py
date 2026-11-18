@@ -106,6 +106,52 @@ class StartFirewallTest(unittest.TestCase):
         self.assertEqual(sum(call.startswith("delete allow ") for call in firewall_calls), 3)
         self.assertEqual(sum(call.startswith("allow ") for call in firewall_calls), 3)
 
+    def test_tcp_listener_does_not_block_udp_server_port(self):
+        ss = self.bin / "ss"
+        ss.write_text(
+            '#!/usr/bin/env bash\n'
+            'if [[ "$*" == "-H -lntu" ]]; then\n'
+            '  printf "tcp LISTEN 0 128 0.0.0.0:2302 0.0.0.0:*\\n"\n'
+            'fi\n'
+        )
+        ss.chmod(0o755)
+        env = os.environ.copy()
+        env["PATH"] = f'{self.bin}:{env["PATH"]}'
+
+        result = subprocess.run(
+            ["bash", str(self.scripts / "start.sh"), "--print"],
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=15,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("-port=2302", result.stdout)
+
+    def test_udp_listener_blocks_server_port(self):
+        ss = self.bin / "ss"
+        ss.write_text(
+            '#!/usr/bin/env bash\n'
+            'if [[ "$*" == "-H -lun" ]]; then\n'
+            '  printf "udp UNCONN 0 0 0.0.0.0:2302 0.0.0.0:*\\n"\n'
+            'fi\n'
+        )
+        ss.chmod(0o755)
+        env = os.environ.copy()
+        env["PATH"] = f'{self.bin}:{env["PATH"]}'
+
+        result = subprocess.run(
+            ["bash", str(self.scripts / "start.sh"), "--print"],
+            text=True,
+            capture_output=True,
+            env=env,
+            timeout=15,
+        )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Port 2302 is already in use.", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

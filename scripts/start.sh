@@ -232,7 +232,7 @@ fi
 
 if command -v ss >/dev/null 2>&1; then
 	for port in "$((10#$GAME_PORT))" "$((10#$RCON_PORT))" "$((10#$STEAM_QUERY_PORT))"; do
-		if ss -H -lntu 2>/dev/null | awk -v p="$port" '{n = split($5, a, ":"); if (a[n] == p) found = 1} END {exit !found}'; then
+		if ss -H -lun 2>/dev/null | awk -v p="$port" '{n = split($5, a, ":"); if (a[n] == p) found = 1} END {exit !found}'; then
 			printf 'Port %s is already in use.\n' "$port" >&2
 			exit 1
 		fi
