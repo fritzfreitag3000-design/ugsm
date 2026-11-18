@@ -78,8 +78,22 @@ if [[ ! -d "$SERVER_DIRECTORY" ]]; then
 	exit 1
 fi
 
-# Overwrite the copy; files that only exist in the copy are kept.
+# Overwrite the copy; files that only exist in the copy are kept. Server
+# settings and Git metadata are copied separately to prevent cross-instance
+# credential exposure.
 mkdir -p -- "$UGSM_COPY"
-cp -a -- "$PROJECT_ROOT/." "$UGSM_COPY/"
+tar --exclude='./.git' --exclude='./install/*_server.conf' -C "$PROJECT_ROOT" -cf - . \
+	| tar -C "$UGSM_COPY" -xf -
+install -d -m 0750 "$UGSM_COPY/install"
+install -m 0600 -- "$SERVER_CONFIG" "$UGSM_COPY/install/$(basename -- "$SERVER_CONFIG")"
+if [[ -e "$UGSM_COPY/.git" || -L "$UGSM_COPY/.git" ]]; then
+	rm -rf -- "$UGSM_COPY/.git"
+fi
+shopt -s nullglob
+for copied_config in "$UGSM_COPY"/install/*_server.conf; do
+	[[ "$(basename -- "$copied_config")" == "$(basename -- "$SERVER_CONFIG")" ]] && continue
+	rm -f -- "$copied_config"
+done
+shopt -u nullglob
 chown -R -- "$NEW_USER:$USER_GROUP" "$UGSM_COPY"
 printf 'Copied %s to %s for user %s.\n' "$PROJECT_ROOT" "$UGSM_COPY" "$NEW_USER"

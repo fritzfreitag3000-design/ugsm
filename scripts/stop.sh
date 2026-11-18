@@ -92,6 +92,34 @@ if [[ "$(id -un)" != "$NEW_USER" ]]; then
 	TMUX_CMD=(sudo -u "$NEW_USER" tmux)
 fi
 
+GAME_PORT="$(read_setting "$SERVER_CONFIG" GAME_PORT)"
+RCON_PORT="$(read_setting "$SERVER_CONFIG" RCON_PORT)"
+STEAM_QUERY_PORT="$(read_setting "$SERVER_CONFIG" STEAM_QUERY_PORT)"
+for port_name in GAME_PORT RCON_PORT STEAM_QUERY_PORT; do
+	port="${!port_name}"
+	if [[ ! "$port" =~ ^[0-9]{1,5}$ ]] || (( 10#$port < 1 || 10#$port > 65535 )); then
+		printf 'Invalid or missing %s in %s.\n' "$port_name" "$SERVER_CONFIG" >&2
+		exit 1
+	fi
+done
+
+close_firewall_ports() {
+	local port output
+	UFW_BIN="/usr/sbin/ufw"
+	if [[ ! -x "$UFW_BIN" ]]; then
+		printf 'Warning: ufw was not found at %s; server ports could not be closed.\n' "$UFW_BIN" >&2
+		return 0
+	fi
+	UFW_CMD=("$UFW_BIN")
+	(( EUID == 0 )) || UFW_CMD=(sudo -n "$UFW_BIN")
+	for port in "$((10#$GAME_PORT))" "$((10#$RCON_PORT))" "$((10#$STEAM_QUERY_PORT))"; do
+		if ! output="$("${UFW_CMD[@]}" delete allow "$port/udp" 2>&1)"; then
+			printf 'Warning: Could not remove the UFW allow rule for UDP port %s: %s\n' \
+				"$port" "$output" >&2
+		fi
+	done
+}
+
 if ! command -v flock >/dev/null 2>&1; then
 	printf 'flock is not installed.\n' >&2
 	exit 1
@@ -110,6 +138,7 @@ fi
 
 if ! "${TMUX_CMD[@]}" has-session -t "=$SERVER_NAME" 2>/dev/null; then
 	set_server_state stop
+	close_firewall_ports
 	printf 'Server tmux session "%s" is not running.\n' "$SERVER_NAME"
 	exit 0
 fi
@@ -139,6 +168,7 @@ wait_for_stop() {
 # After Ctrl+C or a kill the data may be inconsistent, so no backup is made.
 server_stopped() {
 	set_server_state stop
+	close_firewall_ports
 	printf 'Server stopped.\n'
 
 	if [[ "${1:-}" == "backup" ]]; then
@@ -163,7 +193,6 @@ server_stopped() {
 set_server_state stopping
 
 # Lock the server, warn the players via BattlEye RCON, then shut it down via RCON.
-RCON_PORT="$(read_setting "$SERVER_CONFIG" RCON_PORT)"
 RCON_PASS="$(read_setting "$SERVER_CONFIG" RCON_PASS)"
 RCON_HOST="$(read_setting "$SERVER_CONFIG" SERVER_IP)"
 [[ -z "$RCON_HOST" || "$RCON_HOST" == "0.0.0.0" ]] && RCON_HOST="127.0.0.1"

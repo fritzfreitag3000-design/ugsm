@@ -24,7 +24,7 @@ class BattlEyeInstallTest(unittest.TestCase):
         steamcmd.chmod(0o755)
         self.config = self.server / "server.conf"
         self.config.write_text(
-            'RCON_PORT="2305"\nRCON_PASS="example"\n'
+            'RCON_PORT="2305"\nRCON_PASS="example"\nADMIN_PASS="configured-admin"\n'
             'GAME_PORT="2302"\nSERVER_IP="127.0.0.1"\n'
         )
         self.legacy = self.data / "battleye\\battleye"
@@ -41,7 +41,8 @@ class BattlEyeInstallTest(unittest.TestCase):
         config.write_text("previous configuration")
         result = self.install()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(config.read_bytes(), (ROOT / "config/default_serverDZ.cfg").read_bytes())
+        self.assertIn('passwordAdmin = "configured-admin";', config.read_text())
+        self.assertNotIn('passwordAdmin = "123";', config.read_text())
 
     def test_missing_template_fails_without_overwriting_server_config(self):
         script = self.server / "ugsm/install/install_dayz.sh"

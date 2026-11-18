@@ -149,6 +149,10 @@ for name in GAME_PORT RCON_PORT STEAM_QUERY_PORT; do
 		exit 1
 	fi
 done
+if [[ "$GAME_PORT" == "$RCON_PORT" || "$GAME_PORT" == "$STEAM_QUERY_PORT" || "$RCON_PORT" == "$STEAM_QUERY_PORT" ]]; then
+	printf 'GAME_PORT, RCON_PORT, and STEAM_QUERY_PORT must be different.\n' >&2
+	exit 1
+fi
 
 NEW_USER="$(read_setting "$SERVER_CONFIG" NEW_USER)"
 if [[ ! "$NEW_USER" =~ ^[a-z_][a-z0-9_-]*$ ]] || ! id "$NEW_USER" >/dev/null 2>&1; then

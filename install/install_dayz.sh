@@ -50,6 +50,7 @@ read_setting() {
 
 RCON_PORT="$(read_setting RCON_PORT)"
 RCON_PASS="$(read_setting RCON_PASS)"
+ADMIN_PASS="$(read_setting ADMIN_PASS)"
 GAME_PORT="$(read_setting GAME_PORT)"
 SERVER_IP="$(read_setting SERVER_IP)"
 if [[ ! "$RCON_PORT" =~ ^[0-9]{1,5}$ ]] || (( 10#$RCON_PORT < 1 || 10#$RCON_PORT > 65535 )); then
@@ -68,6 +69,10 @@ if [[ -z "$SERVER_IP" ]] || ! python3 -c 'import ipaddress, sys; ipaddress.ip_ad
 fi
 if [[ -z "$RCON_PASS" || "$RCON_PASS" =~ [[:space:]] ]]; then
 	printf 'RCON_PASS must be set and must not contain whitespace in %s.\n' "$SERVER_CONFIG" >&2
+	exit 1
+fi
+if [[ -z "$ADMIN_PASS" || "$ADMIN_PASS" == *'"'* || "$ADMIN_PASS" == *'\'* || "$ADMIN_PASS" == *$'\n'* ]]; then
+	printf 'ADMIN_PASS must be set and must not contain quotes, backslashes, or line breaks in %s.\n' "$SERVER_CONFIG" >&2
 	exit 1
 fi
 
@@ -123,7 +128,26 @@ if [[ ! -f "$DEFAULT_SERVER_CONFIG" ]]; then
 	printf 'Default server config was not found: %s\n' "$DEFAULT_SERVER_CONFIG" >&2
 	exit 1
 fi
-cp -- "$DEFAULT_SERVER_CONFIG" "$SERVERDATA_DIRECTORY/serverDZ.cfg"
+TEMP_SERVER_CONFIG="$(mktemp "$SERVERDATA_DIRECTORY/.serverDZ.cfg.XXXXXX")"
+if ! ADMIN_PASS_VALUE="$ADMIN_PASS" awk '
+	BEGIN { replacement = ENVIRON["ADMIN_PASS_VALUE"]; written = 0 }
+	{
+		if (!written && $0 ~ /^[[:space:]]*passwordAdmin[[:space:]]*=/) {
+			print "passwordAdmin = \"" replacement "\";"
+			written = 1
+			next
+		}
+		print
+	}
+	END {
+		if (!written) exit 1
+	}' "$DEFAULT_SERVER_CONFIG" > "$TEMP_SERVER_CONFIG"; then
+	rm -f -- "$TEMP_SERVER_CONFIG"
+	printf 'Default server config has no passwordAdmin setting: %s\n' "$DEFAULT_SERVER_CONFIG" >&2
+	exit 1
+fi
+chmod 0644 "$TEMP_SERVER_CONFIG"
+mv -- "$TEMP_SERVER_CONFIG" "$SERVERDATA_DIRECTORY/serverDZ.cfg"
 printf 'Installed server config at %s/serverDZ.cfg.\n' "$SERVERDATA_DIRECTORY"
 
 # Create the BattlEye RCON settings using the configured port and password.

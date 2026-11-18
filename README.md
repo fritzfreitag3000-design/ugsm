@@ -1,5 +1,25 @@
 # ugsm
 
+## Multiple servers
+
+Run `sudo bash install/install.sh` once for each server and choose **Create a
+new server configuration** when prompted. Each server needs a unique
+`SERVER_NAME` and three UDP ports not used by another UGSM server
+configuration. The installer now prompts for all three ports and refuses
+overlapping assignments.
+
+Servers may use the same Linux account. Their server files, tmux sessions,
+schedulers, backups, RCON settings, and firewall permissions remain scoped to
+the server folder. Each user/server pair receives only the `ufw` commands for
+its own configured UDP ports. Starting opens those ports after initialization;
+stopping closes them again. Host shutdown/reboot remains a host-wide operation
+even when it is initiated from one server's scheduler.
+
+Delete an instance with `sudo bash install/delete_server.sh`. The script stops
+that instance first, removes its scheduler autostart and firewall permissions,
+and does not remove the shared reboot permission while another configuration
+still uses the same Linux account.
+
 ## Server configuration
 
 The DayZ installer copies `config/default_serverDZ.cfg` to

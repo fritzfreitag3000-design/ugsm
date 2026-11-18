@@ -135,7 +135,7 @@ check_udp_port_bound() {
 
 # Runs all health checks. Sets HEALTH_OK (1|0) and HEALTH_DETAILS; always returns 0.
 check_server_health() {
-	local state user game_port steam_port rcon_port port label
+	local state user game_port steam_port rcon_port port label pane_pid
 	HEALTH_OK=1
 	HEALTH_DETAILS=""
 
@@ -166,7 +166,10 @@ check_server_health() {
 		HEALTH_OK=0
 	fi
 
-	if pgrep -u "$user" -f DayZServer >/dev/null 2>&1; then
+	pane_pid="$("${tmux_cmd[@]}" display-message -p -t "=$SERVER_NAME:" '#{pane_pid}' 2>/dev/null || true)"
+	if [[ "$pane_pid" =~ ^[0-9]+$ ]] \
+		&& [[ "$(ps -o uid= -p "$pane_pid" 2>/dev/null | tr -d ' ')" == "$(id -u "$user")" ]] \
+		&& ps -p "$pane_pid" -o args= 2>/dev/null | grep -q '[D]ayZServer'; then
 		HEALTH_DETAILS+=" | dayz process: ✓ ok"
 	else
 		HEALTH_DETAILS+=" | dayz process: ✗ missing"

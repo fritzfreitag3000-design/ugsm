@@ -186,8 +186,8 @@ check_rcon_response() {
 # Check if tmux session exists and is active.
 check_tmux_session() {
 	local session_name="$1"
-	if tmux list-sessions -F "#{session_name}" 2>/dev/null | grep -qx "$session_name"; then
-		if tmux list-sessions -F "#{session_name}:#{?session_attached,attached,detached}" 2>/dev/null | grep -q "^${session_name}:"; then
+	if "${STATUS_TMUX_CMD[@]}" list-sessions -F "#{session_name}" 2>/dev/null | grep -qx "$session_name"; then
+		if "${STATUS_TMUX_CMD[@]}" list-sessions -F "#{session_name}:#{?session_attached,attached,detached}" 2>/dev/null | grep -q "^${session_name}:"; then
 			echo "✓ ACTIVE (attached)"
 		else
 			echo "✓ RUNNING (detached)"
@@ -240,7 +240,7 @@ parse_gamedig_output() {
 # Show only GameDig information when called from the menu.
 if [[ "${1:-}" == "--gamedig" ]]; then
 	SERVER_IP="$(read_setting "$SERVER_CONFIG" SERVER_IP)"
-	GAME_PORT="$(read_setting "$SERVER_CONFIG" GAME_PORT)"
+	STEAM_QUERY_PORT="$(read_setting "$SERVER_CONFIG" STEAM_QUERY_PORT)"
 	QUERY_HOST="$SERVER_IP"
 	[[ -z "$QUERY_HOST" || "$QUERY_HOST" == "0.0.0.0" ]] && QUERY_HOST="127.0.0.1"
 	if ! command -v gamedig &>/dev/null; then
@@ -251,7 +251,7 @@ if [[ "${1:-}" == "--gamedig" ]]; then
 		printf 'Status: unavailable (jq is not installed)\n'
 		exit 1
 	fi
-	if ! gamedig_output="$(query_gamedig "$QUERY_HOST" "$GAME_PORT")" || ! jq -e 'type == "object"' >/dev/null 2>&1 <<< "$gamedig_output"; then
+	if ! gamedig_output="$(query_gamedig "$QUERY_HOST" "$STEAM_QUERY_PORT")" || ! jq -e 'type == "object"' >/dev/null 2>&1 <<< "$gamedig_output"; then
 		printf 'Status: unavailable (server query failed)\n'
 		exit 1
 	fi
@@ -272,6 +272,10 @@ RCON_PORT="$(read_setting "$SERVER_CONFIG" RCON_PORT)"
 STEAM_QUERY_PORT="$(read_setting "$SERVER_CONFIG" STEAM_QUERY_PORT)"
 RCON_PASS="$(read_setting "$SERVER_CONFIG" RCON_PASS)"
 NEW_USER="$(read_setting "$SERVER_CONFIG" NEW_USER)"
+STATUS_TMUX_CMD=(tmux)
+if [[ "$(id -un)" != "$NEW_USER" ]]; then
+	STATUS_TMUX_CMD=(sudo -n -u "$NEW_USER" tmux)
+fi
 load_ufw_status
 
 # ============================================================================
@@ -334,9 +338,9 @@ printf "│ Session Name: %s\n" "$SERVER_NAME"
 printf "│ Status: " && check_tmux_session "$SERVER_NAME"
 printf "│\n"
 
-if tmux has-session -t "$SERVER_NAME" 2>/dev/null; then
+if "${STATUS_TMUX_CMD[@]}" has-session -t "=$SERVER_NAME" 2>/dev/null; then
 	printf "│ Active Windows/Panes:\n"
-	tmux list-windows -t "$SERVER_NAME" -F "│   #{window_index}: #{window_name} (#{window_panes} panes)" || true
+	"${STATUS_TMUX_CMD[@]}" list-windows -t "=$SERVER_NAME" -F "│   #{window_index}: #{window_name} (#{window_panes} panes)" || true
 	printf "│\n"
 fi
 
@@ -351,10 +355,10 @@ printf "\n┌─ GameDig Server Query ──────────────
 if command -v gamedig &>/dev/null; then
 	QUERY_HOST="$SERVER_IP"
 	[[ -z "$QUERY_HOST" || "$QUERY_HOST" == "0.0.0.0" ]] && QUERY_HOST="127.0.0.1"
-	printf "│ Querying server at %s:%s...\n" "$QUERY_HOST" "$GAME_PORT"
+	printf "│ Querying server at %s:%s...\n" "$QUERY_HOST" "$STEAM_QUERY_PORT"
 	printf "│\n"
 	
-	gamedig_output=$(query_gamedig "$QUERY_HOST" "$GAME_PORT" 2>&1 || echo "")
+	gamedig_output=$(query_gamedig "$QUERY_HOST" "$STEAM_QUERY_PORT" 2>&1 || echo "")
 	
 	if [[ -n "$gamedig_output" ]]; then
 		parse_gamedig_output "$gamedig_output"
@@ -381,11 +385,11 @@ printf "│ Config File: %s\n" "$SERVER_CONFIG"
 
 # Show server process info if running.
 if [[ "$STATE" == "running" ]]; then
-	mapfile -t server_pids < <(pgrep -u "$NEW_USER" -f DayZServer 2>/dev/null || true)
-	if (( ${#server_pids[@]} > 0 )); then
-		for server_pid in "${server_pids[@]}"; do
-			printf "│ Process ID: %s\n" "$server_pid"
-		done
+	server_pid="$("${STATUS_TMUX_CMD[@]}" display-message -p -t "=$SERVER_NAME:" '#{pane_pid}' 2>/dev/null || true)"
+	if [[ "$server_pid" =~ ^[0-9]+$ ]] \
+		&& [[ "$(ps -o uid= -p "$server_pid" 2>/dev/null | tr -d ' ')" == "$(id -u "$NEW_USER")" ]] \
+		&& ps -p "$server_pid" -o args= 2>/dev/null | grep -q '[D]ayZServer'; then
+		printf "│ Process ID: %s\n" "$server_pid"
 	fi
 fi
 

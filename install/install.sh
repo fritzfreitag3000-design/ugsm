@@ -60,6 +60,9 @@ REQUIRED_PACKAGES=(
 	util-linux
 	nodejs
 	npm
+	jq
+	iproute2
+	procps
 )
 
 # Collect packages that are not installed yet.
@@ -246,6 +249,10 @@ if [[ "$SELECTED_EXISTING_CONFIG" -eq 0 ]]; then
 	prompt_setting SERVER_NAME 'Server name (folder/config name)'
 	prompt_setting STEAM_USER 'Steam account user (empty or anonymous = SteamCMD prompts)'
 	prompt_setting RCON_PASS 'RCON password' 1
+	prompt_setting ADMIN_PASS 'DayZ admin password' 1
+	prompt_setting GAME_PORT 'DayZ game port (UDP)'
+	prompt_setting RCON_PORT 'BattlEye RCON port (UDP)'
+	prompt_setting STEAM_QUERY_PORT 'Steam query port (UDP)'
 
 	# Offer to edit the remaining (advanced) settings in nano.
 	read -r -p 'Edit the advanced configuration (ports, IP, admin password) in nano? [y/N] ' EDIT_ANSWER
@@ -283,6 +290,7 @@ if [[ "$INSTALL_CONFIG" == "$RENAMED_CONFIG" && -f "$RENAMED_CONFIG" && -f "$SCR
 	rm -- "$SCRIPT_DIR/default_server.conf"
 	printf 'Removed temporary settings file: %s/default_server.conf\n' "$SCRIPT_DIR"
 fi
+chmod 0600 "$INSTALL_CONFIG"
 
 # Read the user name and UDP ports from the renamed settings file.
 NEW_USER="$(read_setting NEW_USER)"
@@ -290,10 +298,20 @@ GAME_PORT="$(read_setting GAME_PORT)"
 RCON_PORT="$(read_setting RCON_PORT)"
 STEAM_QUERY_PORT="$(read_setting STEAM_QUERY_PORT)"
 STEAM_USER="$(read_setting STEAM_USER)"
+RCON_PASS="$(read_setting RCON_PASS)"
+ADMIN_PASS="$(read_setting ADMIN_PASS)"
 
 # Check that the configured name is a valid Linux user name.
-if [[ ! "$NEW_USER" =~ ^[a-z_][a-z0-9_-]*[$]?$ ]] || [[ "${#NEW_USER}" -gt 32 ]]; then
+if [[ ! "$NEW_USER" =~ ^[a-z_][a-z0-9_-]*$ ]] || [[ "${#NEW_USER}" -gt 32 ]]; then
 	printf 'Invalid or missing NEW_USER in %s.\n' "$INSTALL_CONFIG" >&2
+	exit 1
+fi
+if [[ -z "$RCON_PASS" || "$RCON_PASS" =~ [[:space:]] || "$RCON_PASS" == *'"'* || "$RCON_PASS" == *'\'* ]]; then
+	printf 'RCON_PASS must be set and must not contain whitespace, quotes, or backslashes in %s.\n' "$INSTALL_CONFIG" >&2
+	exit 1
+fi
+if [[ -z "$ADMIN_PASS" || "$ADMIN_PASS" == *'"'* || "$ADMIN_PASS" == *'\'* || "$ADMIN_PASS" == *$'\n'* ]]; then
+	printf 'ADMIN_PASS must be set and must not contain quotes, backslashes, or line breaks in %s.\n' "$INSTALL_CONFIG" >&2
 	exit 1
 fi
 
@@ -329,14 +347,55 @@ if [[ "$GAME_PORT" == "$RCON_PORT" || "$GAME_PORT" == "$STEAM_QUERY_PORT" || "$R
 	exit 1
 fi
 
-# Prepare exact sudo rules for the configured UDP ports only.
+# A UDP port may belong to only one installed server configuration.
+shopt -s nullglob
+OTHER_CONFIGS=("$SCRIPT_DIR"/*_server.conf)
+shopt -u nullglob
+for other_config in "${OTHER_CONFIGS[@]}"; do
+	[[ "$other_config" == "$INSTALL_CONFIG" || "$(basename -- "$other_config")" == "default_server.conf" ]] && continue
+	other_name="$(awk -F= '$1 ~ /^[[:space:]]*SERVER_NAME[[:space:]]*$/ {
+		value=$2; gsub(/^[[:space:]]+|[[:space:]]+$/, "", value);
+		gsub(/^"|"$/, "", value); print value; exit
+	}' "$other_config")"
+	other_name="${other_name:-$(basename -- "$other_config" _server.conf)}"
+	for port_name in GAME_PORT RCON_PORT STEAM_QUERY_PORT; do
+		other_port="$(awk -v key="$port_name" '
+		{
+			separator=index($0, "=")
+			if (!separator) next
+			name=substr($0, 1, separator - 1)
+			gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
+			if (name == key) {
+				value=substr($0, separator + 1)
+				gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+				gsub(/^"|"$/, "", value)
+				print value
+				exit
+			}
+		}' "$other_config")"
+		[[ "$other_port" =~ ^[0-9]{1,5}$ ]] || continue
+		other_port="$((10#$other_port))"
+		for current_port in "$GAME_PORT" "$RCON_PORT" "$STEAM_QUERY_PORT"; do
+			if [[ "$current_port" == "$other_port" ]]; then
+				printf 'UDP port %s is already assigned to server %s (%s).\n' \
+					"$current_port" "$other_name" "$other_config" >&2
+				exit 1
+			fi
+		done
+	done
+done
+
+# Give each user/server pair its own exact firewall commands. A single file
+# per user would make the second installed server replace the first one's ports.
+FIREWALL_ID="$(printf '%s\0%s' "$NEW_USER" "$SERVER_NAME" | sha256sum | cut -c1-32)"
 UFW_BIN="/usr/sbin/ufw"
-SUDOERS_FILE="/etc/sudoers.d/ugsm-${NEW_USER}-ufw"
+SUDOERS_FILE="/etc/sudoers.d/ugsm-ufw-$FIREWALL_ID"
+LEGACY_USER_SUDOERS="/etc/sudoers.d/ugsm-${NEW_USER}-ufw"
 if [[ ! -x "$UFW_BIN" ]]; then
 	printf 'UFW was not found at %s.\n' "$UFW_BIN" >&2
 	exit 1
 fi
-TEMP_SUDOERS="$(mktemp "/etc/sudoers.d/.ugsm-${NEW_USER}-ufw.XXXXXX")"
+TEMP_SUDOERS="$(mktemp "/etc/sudoers.d/.ugsm-ufw.XXXXXX")"
 trap 'rm -f -- "$TEMP_SUDOERS"' EXIT
 SUDOERS_RULE="$NEW_USER ALL=(root) NOPASSWD: $UFW_BIN status verbose,"
 LEGACY_SUDOERS_RULE="$NEW_USER ALL=(root) NOPASSWD:"
@@ -403,6 +462,12 @@ USER_GROUP="$(id -gn "$NEW_USER")"
 SERVER_DIRECTORY="$USER_HOME/$SERVER_NAME"
 
 # Create the server folder and its required subfolders for the new user.
+for server_path in "$SERVER_DIRECTORY" "$SERVER_DIRECTORY/steam" "$SERVER_DIRECTORY/serverdata"; do
+	if [[ -L "$server_path" || ( -e "$server_path" && ! -d "$server_path" ) ]]; then
+		printf 'Unsafe server directory path: %s\n' "$server_path" >&2
+		exit 1
+	fi
+done
 install -d -o "$NEW_USER" -g "$USER_GROUP" -m 0750 \
 	"$SERVER_DIRECTORY" \
 	"$SERVER_DIRECTORY/steam" \
@@ -417,6 +482,14 @@ if [[ "$SUDOERS_ALREADY_INSTALLED" -eq 0 ]]; then
 	fi
 	trap - EXIT
 	printf 'Granted %s permission to open and close only the configured UDP ports with sudo ufw.\n' "$NEW_USER"
+fi
+# Remove the old per-user file only when it is demonstrably this server's rule.
+if [[ -f "$LEGACY_USER_SUDOERS" && ! -L "$LEGACY_USER_SUDOERS" ]] \
+	&& [[ "$(stat -c '%u:%a' "$LEGACY_USER_SUDOERS")" == '0:440' ]] \
+	&& { printf '%s\n' "$SUDOERS_RULE" | cmp -s - "$LEGACY_USER_SUDOERS" \
+		|| printf '%s\n' "$LEGACY_SUDOERS_RULE" | cmp -s - "$LEGACY_USER_SUDOERS"; }; then
+	rm -- "$LEGACY_USER_SUDOERS"
+	printf 'Removed the superseded per-user firewall sudoers rule.\n'
 fi
 
 # Allow this user to reboot the host without granting other systemctl actions.
@@ -695,7 +768,10 @@ fi
 # Copy the project folder into the server folder and assign it to the new user.
 SERVER_CONFIG_NAME="$(basename -- "$INSTALL_CONFIG")"
 if [[ -e "$UGSM_COPY" ]]; then
-	if [[ ! -d "$UGSM_COPY" || ! -f "$UGSM_COPY/install/install_dayz.sh" || ! -r "$UGSM_COPY/install/$SERVER_CONFIG_NAME" ]]; then
+	if [[ ! -d "$UGSM_COPY" || -L "$UGSM_COPY" || -L "$UGSM_COPY/install" ]] \
+		|| [[ ! -f "$UGSM_COPY/install/install_dayz.sh" || -L "$UGSM_COPY/install/install_dayz.sh" ]] \
+		|| [[ ! -f "$UGSM_COPY/install/$SERVER_CONFIG_NAME" || -L "$UGSM_COPY/install/$SERVER_CONFIG_NAME" ]] \
+		|| [[ ! -r "$UGSM_COPY/install/$SERVER_CONFIG_NAME" ]]; then
 		printf 'Existing project copy is incomplete or missing the selected server config: %s\n' "$UGSM_COPY" >&2
 		exit 1
 	fi
@@ -704,10 +780,30 @@ if [[ -e "$UGSM_COPY" ]]; then
 	fi
 	printf 'Project copy already exists; reusing it.\n'
 else
-	cp -a -- "$PROJECT_ROOT" "$UGSM_COPY"
+	install -d -o "$NEW_USER" -g "$USER_GROUP" -m 0750 "$UGSM_COPY"
+	tar --exclude='./.git' --exclude='./install/*_server.conf' -C "$PROJECT_ROOT" -cf - . \
+		| tar -C "$UGSM_COPY" -xf -
+	install -d -m 0750 "$UGSM_COPY/install"
+	install -m 0600 -- "$INSTALL_CONFIG" "$UGSM_COPY/install/$SERVER_CONFIG_NAME"
 	chown -R -- "$NEW_USER:$USER_GROUP" "$UGSM_COPY"
 	printf 'Copied the ugsm folder to: %s\n' "$UGSM_COPY"
 fi
+
+# Never leave Git metadata or another server's credentials in an instance copy.
+if [[ -e "$UGSM_COPY/.git" || -L "$UGSM_COPY/.git" ]]; then
+	rm -rf -- "$UGSM_COPY/.git"
+fi
+shopt -s nullglob
+for copied_config in "$UGSM_COPY"/install/*_server.conf; do
+	[[ "$(basename -- "$copied_config")" == "$SERVER_CONFIG_NAME" ]] && continue
+	rm -f -- "$copied_config"
+done
+shopt -u nullglob
+if [[ ! -f "$UGSM_COPY/install/$SERVER_CONFIG_NAME" || -L "$UGSM_COPY/install/$SERVER_CONFIG_NAME" ]]; then
+	printf 'Selected server config is not a regular file in: %s\n' "$UGSM_COPY/install" >&2
+	exit 1
+fi
+chmod 0600 "$UGSM_COPY/install/$SERVER_CONFIG_NAME"
 
 # Run the copied DayZ installer as the new server user.
 DAYZ_INSTALL_DIR="$UGSM_COPY/install"
